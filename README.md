@@ -53,4 +53,6 @@ GitHub Pages는 Python 서버를 실행하지 못합니다. 전체 기능 배포
 - `ADMIN_USERNAME`
 - `ADMIN_BOOTSTRAP_PASSWORD`
 
+`render.yaml`은 Render 무료 Web Service용 초기 구성입니다. 무료 환경에서는 DB가 재시작 시 초기화될 수 있어 시작 직후 및 60분마다 공식 데이터를 다시 수집합니다. 운영 단계에서는 유료 영구 디스크나 PostgreSQL 전환을 권장합니다.
+
 Pexels 영상은 해당 콘텐츠 페이지와 제작자 링크를 화면에 표시해 출처를 고지합니다.

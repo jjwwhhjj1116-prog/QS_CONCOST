@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import threading
 import time
@@ -67,9 +68,10 @@ class Handler(BaseHTTPRequestHandler):
         return username
 
     def _session_cookie(self, token: str, max_age: int = 28_800) -> None:
+        secure = "; Secure" if os.getenv("COOKIE_SECURE", "").lower() in {"1", "true", "yes"} else ""
         self.send_header(
             "Set-Cookie",
-            f"qs_admin_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}",
+            f"qs_admin_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{secure}",
         )
 
     def do_GET(self) -> None:
@@ -306,6 +308,18 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(settings: Settings, open_browser: bool = False) -> None:
     migrate_secret(settings.db_path, "public_data_api_key", settings.service_key)
+    interval = max(0, int(os.getenv("AUTO_COLLECT_INTERVAL_MINUTES", "0") or "0"))
+    if interval:
+        def auto_collect() -> None:
+            from .cli import collect
+            while True:
+                try:
+                    collect()
+                except Exception as exc:
+                    print(f"자동수집 실패: {exc}")
+                time.sleep(interval * 60)
+        worker = threading.Thread(target=auto_collect, name="auto-collector", daemon=True)
+        worker.start()
     handler = type("ConfiguredHandler", (Handler,), {"settings": settings})
     server = ThreadingHTTPServer((settings.host, settings.port), handler)
     url = f"http://{settings.host}:{settings.port}"

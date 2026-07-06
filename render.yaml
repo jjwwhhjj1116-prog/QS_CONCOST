@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: qs-concost
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/stats
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: DB_PATH
+        value: /tmp/tender_radar.db
+      - key: AUTO_COLLECT_INTERVAL_MINUTES
+        value: 60
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: ADMIN_USERNAME
+        value: concost
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        sync: false
+      - key: DATA_GO_KR_SERVICE_KEY
+        sync: false
+      - key: LAW_API_OC
+        sync: false
