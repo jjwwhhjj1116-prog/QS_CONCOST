@@ -11,6 +11,9 @@
 - 중복 제거, 변경공고 감지, 검토 상태 관리
 - 관리자 전용 API 설정과 비밀번호 변경
 - CONCOST 브랜드 영상 대시보드
+- 평일 오전 8시 30분 CONCOST 브랜드 이메일 브리핑
+- 관리자 주소록, HTML 미리보기, 즉시 발송 및 발송 이력
+- 신규 공고 우선 노출, 기존 알림 프로젝트 구분, 적합도 점수 표시
 
 ## Windows 로컬 실행
 
@@ -52,6 +55,23 @@ GitHub Pages는 Python 서버를 실행하지 못합니다. 전체 기능 배포
 - `LAW_API_OC`
 - `ADMIN_USERNAME`
 - `ADMIN_BOOTSTRAP_PASSWORD`
+- `APP_SECRET_KEY` (서버 저장 인증값 암호화용 24자 이상 임의 문자열)
+- `RESEND_API_KEY` (SMTP 대신 HTTPS로 메일을 보내는 Resend API 키)
+- `DIGEST_FROM_EMAIL` (예: `CONCOST <news@con-cost.com>`)
+- `DIGEST_RECIPIENTS` (재시작 시 복원할 수신 주소, 쉼표 구분)
+- `DIGEST_TRIGGER_TOKEN` (예약 발송 API 인증용 임의 문자열)
+
+## 이메일 자동 알림
+
+1. Resend에서 발신 도메인을 인증하고 API 키를 발급합니다.
+2. 관리자 설정의 **평일 아침 이메일 브리핑**에서 발신 주소와 API 키를 저장합니다.
+3. 알림 주소록에 사내 수신자를 등록하고 HTML 미리보기로 내용을 확인합니다.
+4. GitHub Actions의 `CONCOST weekday email digest`가 일~목요일 23:30 UTC, 즉 월~금요일 08:30 KST에 서버를 호출합니다.
+5. 서버는 최신 공고·뉴스·법령을 먼저 수집한 뒤 주소록 전체에 브리핑을 발송합니다.
+
+Render 무료 Web Service는 SMTP 포트가 차단되어 있으므로 메일은 Resend HTTPS API로 전송합니다. GitHub 저장소의 Actions Secret과 Render 환경변수에 동일한 `DIGEST_TRIGGER_TOKEN`을 설정해야 합니다.
+
+무료 Web Service의 SQLite 파일은 휴면·재시작·재배포 때 삭제됩니다. 따라서 운영 전에는 유료 Persistent Disk(`/var/data/tender_radar.db`)나 외부 PostgreSQL을 연결해야 주소록과 발송 이력이 안정적으로 유지됩니다. 임시 운영 중에는 `DIGEST_RECIPIENTS` 환경변수에 수신 주소를 쉼표로 등록하면 재시작 시 주소록이 복원됩니다.
 
 `render.yaml`은 Render 무료 Web Service용 초기 구성입니다. 무료 환경에서는 DB가 재시작 시 초기화될 수 있어 시작 직후 및 60분마다 공식 데이터를 다시 수집합니다. 운영 단계에서는 유료 영구 디스크나 PostgreSQL 전환을 권장합니다.
 

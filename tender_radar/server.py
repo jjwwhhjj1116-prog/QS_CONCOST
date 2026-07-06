@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -15,12 +16,13 @@ from urllib.parse import parse_qs, urlparse
 from .config import Settings
 from .db import (
     authenticate_admin, change_admin_password, get_setting, list_notices, set_setting,
-    list_news, prune_news, stats, update_status, upsert_news, upsert_notice,
+    delete_digest_recipient, list_digest_deliveries, list_digest_recipients,
+    list_news, prune_news, save_digest_recipient, stats, update_status, upsert_news, upsert_notice,
 )
 from .official_news import collect_official_news
 from .law_news import collect_law_news
 from .collector import collect_all
-from .digest import build_daily_digest
+from .email_digest import build_email_digest, send_email_digest, valid_email
 from .secrets_store import get_secret, migrate_secret, set_secret
 
 
@@ -32,6 +34,7 @@ class Handler(BaseHTTPRequestHandler):
     sessions: dict[str, tuple[str, float]] = {}
     session_lock = threading.Lock()
     login_failures: dict[str, list[float]] = {}
+    digest_lock = threading.Lock()
 
     def _json(self, value: object, status: int = 200) -> None:
         data = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -117,7 +120,27 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/admin/digest-preview":
             if not self._require_admin():
                 return
-            self._json(build_daily_digest(self.settings.db_path))
+            preview = build_email_digest(self.settings.db_path)
+            self._json({
+                "subject": preview["subject"], "html": preview["html"],
+                "text": preview["text"], "counts": preview["counts"],
+            })
+            return
+        if parsed.path == "/api/admin/email-settings":
+            if not self._require_admin():
+                return
+            self._json({
+                "recipients": list_digest_recipients(self.settings.db_path),
+                "deliveries": list_digest_deliveries(self.settings.db_path),
+                "provider_configured": bool(get_secret(self.settings.db_path, "resend_api_key")),
+                "from_email": get_setting(
+                    self.settings.db_path, "digest_from_email", os.getenv("DIGEST_FROM_EMAIL", "")
+                ),
+                "enabled": get_setting(self.settings.db_path, "digest_enabled", "1") == "1",
+                "schedule_time": get_setting(self.settings.db_path, "digest_schedule_time", "08:30"),
+                "timezone": "Asia/Seoul",
+                "storage_persistent": os.getenv("DB_PATH", "").startswith("/var/data/"),
+            })
             return
         if parsed.path in {"/", "/index.html"}:
             path = STATIC_DIR / "index.html"
@@ -198,6 +221,53 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if parsed.path == "/api/automation/digest":
+            expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
+            supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            if not expected or not secrets.compare_digest(expected, supplied):
+                self._json({"error": "인증되지 않은 예약 발송 요청입니다."}, 401)
+                return
+            if get_setting(self.settings.db_path, "digest_enabled", "1") != "1":
+                self._json({"ok": True, "skipped": True, "reason": "예약 발송 꺼짐"})
+                return
+            if not self.digest_lock.acquire(blocking=False):
+                self._json({"error": "이미 발송 작업이 진행 중입니다."}, 409)
+                return
+            try:
+                from .cli import collect
+                collect()
+                self._json(send_email_digest(self.settings.db_path))
+            except Exception as exc:
+                self._json({"error": str(exc)}, 502)
+            finally:
+                self.digest_lock.release()
+            return
+        if parsed.path == "/api/admin/recipients":
+            if not self._require_admin():
+                return
+            try:
+                payload = self._read_json()
+                email = str(payload.get("email", "")).strip().lower()
+                name = str(payload.get("name", "")).strip()
+                if not valid_email(email):
+                    raise ValueError("올바른 이메일 주소를 입력하세요.")
+                self._json({"ok": True, "recipient": save_digest_recipient(self.settings.db_path, email, name)})
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._json({"error": str(exc)}, 400)
+            return
+        if parsed.path == "/api/admin/send-digest":
+            if not self._require_admin():
+                return
+            if not self.digest_lock.acquire(blocking=False):
+                self._json({"error": "이미 발송 작업이 진행 중입니다."}, 409)
+                return
+            try:
+                self._json(send_email_digest(self.settings.db_path))
+            except Exception as exc:
+                self._json({"error": str(exc)}, 502)
+            finally:
+                self.digest_lock.release()
+            return
         if parsed.path != "/api/collect":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -262,6 +332,24 @@ class Handler(BaseHTTPRequestHandler):
                 set_secret(self.settings.db_path, "law_api_oc", law_api_key)
             self._json({"ok": True, "law_api_configured": bool(get_secret(self.settings.db_path, "law_api_oc"))})
             return
+        if parsed.path == "/api/admin/email-settings":
+            resend_api_key = str(payload.get("resend_api_key", "")).strip()
+            from_email = str(payload.get("from_email", "")).strip()
+            schedule_time = str(payload.get("schedule_time", "08:30")).strip()
+            if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", schedule_time):
+                self._json({"error": "발송 시간 형식이 올바르지 않습니다."}, 400)
+                return
+            if from_email and not valid_email(from_email.split("<")[-1].rstrip("> ")):
+                self._json({"error": "발신 이메일 형식을 확인하세요."}, 400)
+                return
+            if resend_api_key:
+                set_secret(self.settings.db_path, "resend_api_key", resend_api_key)
+            if from_email:
+                set_setting(self.settings.db_path, "digest_from_email", from_email)
+            set_setting(self.settings.db_path, "digest_enabled", "1" if payload.get("enabled", True) else "0")
+            set_setting(self.settings.db_path, "digest_schedule_time", schedule_time)
+            self._json({"ok": True, "provider_configured": bool(get_secret(self.settings.db_path, "resend_api_key"))})
+            return
         if parsed.path == "/api/admin/password":
             current = str(payload.get("current_password", ""))
             new = str(payload.get("new_password", ""))
@@ -281,6 +369,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if not self._require_admin():
+            return
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) == 4 and parts[:3] == ["api", "admin", "recipients"]:
+            try:
+                recipient_id = int(parts[3])
+            except ValueError:
+                self._json({"error": "잘못된 수신자 번호입니다."}, 400)
+                return
+            if delete_digest_recipient(self.settings.db_path, recipient_id):
+                self._json({"ok": True})
+            else:
+                self._json({"error": "수신자를 찾을 수 없습니다."}, 404)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 

@@ -22,3 +22,13 @@ services:
         sync: false
       - key: LAW_API_OC
         sync: false
+      - key: APP_SECRET_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DIGEST_FROM_EMAIL
+        sync: false
+      - key: DIGEST_RECIPIENTS
+        sync: false
+      - key: DIGEST_TRIGGER_TOKEN
+        sync: false

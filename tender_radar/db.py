@@ -67,6 +67,38 @@ CREATE TABLE IF NOT EXISTS news (
     UNIQUE(source, source_key)
 );
 CREATE INDEX IF NOT EXISTS idx_news_published ON news(published_at DESC);
+CREATE TABLE IF NOT EXISTS digest_recipients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS digest_deliveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'sending',
+    subject TEXT NOT NULL DEFAULT '',
+    recipient_count INTEGER NOT NULL DEFAULT 0,
+    new_notice_count INTEGER NOT NULL DEFAULT 0,
+    existing_notice_count INTEGER NOT NULL DEFAULT 0,
+    new_news_count INTEGER NOT NULL DEFAULT 0,
+    existing_news_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS digest_delivery_items (
+    delivery_id INTEGER NOT NULL,
+    item_kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    is_new INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(delivery_id,item_kind,source,source_key),
+    FOREIGN KEY(delivery_id) REFERENCES digest_deliveries(id)
+);
+CREATE INDEX IF NOT EXISTS idx_digest_items_key
+ON digest_delivery_items(item_kind,source,source_key);
 """
 
 PASSWORD_ITERATIONS = 310_000
@@ -124,6 +156,15 @@ def init_db(db_path: Path) -> None:
                 "INSERT OR IGNORE INTO admins(username,password_salt,password_hash,iterations,updated_at) VALUES(?,?,?,?,?)",
                 (username, salt, _password_hash(bootstrap_password, salt), PASSWORD_ITERATIONS, now),
             )
+        for email in os.getenv("DIGEST_RECIPIENTS", "").split(","):
+            email = email.strip().lower()
+            if email:
+                now = datetime.now().astimezone().isoformat(timespec="seconds")
+                conn.execute(
+                    "INSERT OR IGNORE INTO digest_recipients(email,name,is_active,created_at,updated_at) "
+                    "VALUES(?,?,1,?,?)",
+                    (email, "", now, now),
+                )
 
 
 def _password_hash(password: str, salt_hex: str, iterations: int = PASSWORD_ITERATIONS) -> str:
@@ -355,3 +396,47 @@ def stats(db_path: Path) -> dict[str, int]:
             FROM notices"""
         ).fetchone()
     return {key: int(row[key] or 0) for key in row.keys()}
+
+
+def list_digest_recipients(db_path: Path) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id,email,name,is_active,created_at,updated_at FROM digest_recipients "
+            "ORDER BY is_active DESC,name,email"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_digest_recipient(db_path: Path, email: str, name: str = "") -> dict[str, Any]:
+    init_db(db_path)
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    email = email.strip().lower()
+    name = name.strip()[:80]
+    with connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO digest_recipients(email,name,is_active,created_at,updated_at) VALUES(?,?,1,?,?) "
+            "ON CONFLICT(email) DO UPDATE SET name=excluded.name,is_active=1,updated_at=excluded.updated_at",
+            (email, name, now, now),
+        )
+        row = conn.execute(
+            "SELECT id,email,name,is_active,created_at,updated_at FROM digest_recipients WHERE email=?",
+            (email,),
+        ).fetchone()
+    return dict(row)
+
+
+def delete_digest_recipient(db_path: Path, recipient_id: int) -> bool:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute("DELETE FROM digest_recipients WHERE id=?", (recipient_id,))
+    return cursor.rowcount == 1
+
+
+def list_digest_deliveries(db_path: Path, limit: int = 10) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM digest_deliveries ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(row) for row in rows]

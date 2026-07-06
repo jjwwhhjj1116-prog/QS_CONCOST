@@ -2,7 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tender_radar.db import list_notices, upsert_notice
+from tender_radar.db import (
+    connect, delete_digest_recipient, list_digest_recipients, save_digest_recipient,
+    list_notices, upsert_notice,
+)
+from tender_radar.email_digest import build_email_digest
 from tender_radar.g2b import normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
@@ -51,6 +55,40 @@ class MVPTests(unittest.TestCase):
             self.assertEqual(upsert_notice(db, notice), "inserted")
             self.assertEqual(upsert_notice(db, notice), "unchanged")
             self.assertEqual(len(list_notices(db)), 1)
+
+    def test_digest_recipient_address_book(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "test.db"
+            saved = save_digest_recipient(db, "TEAM@con-cost.com", "견적팀")
+            self.assertEqual(saved["email"], "team@con-cost.com")
+            self.assertEqual(len(list_digest_recipients(db)), 1)
+            self.assertTrue(delete_digest_recipient(db, saved["id"]))
+            self.assertEqual(list_digest_recipients(db), [])
+
+    def test_branded_digest_separates_new_and_existing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "test.db"
+            notice = normalize_item({
+                "bidNtceNo": "MAIL-1", "bidNtceNm": "공사비 검증 용역",
+                "ntceInsttNm": "테스트기관", "bidClseDt": "20260710",
+            }, "용역")
+            upsert_notice(db, notice)
+            first = build_email_digest(db)
+            self.assertEqual(first["counts"]["new_notices"], 1)
+            self.assertIn("적합도", first["html"])
+            self.assertIn("QS_ConCost 바로가기", first["html"])
+            with connect(db) as conn:
+                delivery_id = conn.execute(
+                    "INSERT INTO digest_deliveries(started_at,status,subject) VALUES('now','sent','test')"
+                ).lastrowid
+                conn.execute(
+                    "INSERT INTO digest_delivery_items(delivery_id,item_kind,source,source_key,is_new) VALUES(?,?,?,?,1)",
+                    (delivery_id, "notice", notice["source"], notice["source_key"]),
+                )
+            second = build_email_digest(db)
+            self.assertEqual(second["counts"]["new_notices"], 0)
+            self.assertEqual(second["counts"]["old_notices"], 1)
+            self.assertIn("기존 알림 프로젝트", second["html"])
 
 
 if __name__ == "__main__":
