@@ -64,15 +64,15 @@ GitHub Pages는 Python 서버를 실행하지 못합니다. 전체 기능 배포
 ## 이메일 자동 알림
 
 1. Resend에서 발신 도메인을 인증하고 API 키를 발급합니다.
-2. 관리자 설정의 **평일 아침 이메일 브리핑**에서 발신 주소와 API 키를 저장합니다.
+2. 관리자 설정의 **매일 아침 자료 수집·이메일 브리핑**에서 발신 주소와 API 키를 저장합니다.
 3. 알림 주소록에 사내 수신자를 등록하고 HTML 미리보기로 내용을 확인합니다.
-4. GitHub Actions의 `CONCOST weekday email digest`가 일~목요일 23:30 UTC, 즉 월~금요일 08:30 KST에 서버를 호출합니다.
-5. 서버는 최신 공고·뉴스·법령을 먼저 수집한 뒤 주소록 전체에 브리핑을 발송합니다.
+4. GitHub Actions의 `CONCOST daily data collection`이 매일 00:20 UTC, 즉 09:20 KST에 최신 공고·뉴스·법령을 수집합니다.
+5. `CONCOST daily email digest`가 매일 01:00 UTC, 즉 10:00 KST에 주소록 전체로 브리핑을 발송합니다.
 
 Render 무료 Web Service는 SMTP 포트가 차단되어 있으므로 메일은 Resend HTTPS API로 전송합니다. GitHub 저장소의 Actions Secret과 Render 환경변수에 동일한 `DIGEST_TRIGGER_TOKEN`을 설정해야 합니다.
 
 무료 Web Service의 SQLite 파일은 휴면·재시작·재배포 때 삭제됩니다. 따라서 운영 전에는 유료 Persistent Disk(`/var/data/tender_radar.db`)나 외부 PostgreSQL을 연결해야 주소록과 발송 이력이 안정적으로 유지됩니다. 임시 운영 중에는 `DIGEST_RECIPIENTS` 환경변수에 수신 주소를 쉼표로 등록하면 재시작 시 주소록이 복원됩니다.
 
-`render.yaml`은 Render 무료 Web Service용 초기 구성입니다. 무료 환경에서는 DB가 재시작 시 초기화될 수 있어 시작 직후 및 60분마다 공식 데이터를 다시 수집합니다. 운영 단계에서는 유료 영구 디스크나 PostgreSQL 전환을 권장합니다.
+`render.yaml`은 Render 무료 Web Service용 초기 구성입니다. 공식 데이터는 매일 09:20 KST에 GitHub Actions가 갱신합니다. 운영 단계에서는 유료 영구 디스크나 PostgreSQL 전환을 권장합니다.
 
 Pexels 영상은 해당 콘텐츠 페이지와 제작자 링크를 화면에 표시해 출처를 고지합니다.

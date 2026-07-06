@@ -4,7 +4,7 @@ from pathlib import Path
 
 from tender_radar.db import (
     connect, delete_digest_recipient, list_digest_recipients, save_digest_recipient,
-    list_notices, upsert_notice,
+    get_setting, init_db, list_notices, set_setting, upsert_notice,
 )
 from tender_radar.email_digest import build_email_digest, build_resend_request
 from tender_radar.g2b import normalize_item
@@ -64,6 +64,13 @@ class MVPTests(unittest.TestCase):
             self.assertEqual(len(list_digest_recipients(db)), 1)
             self.assertTrue(delete_digest_recipient(db, saved["id"]))
             self.assertEqual(list_digest_recipients(db), [])
+
+    def test_old_digest_schedule_migrates_to_ten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "test.db"
+            set_setting(db, "digest_schedule_time", "08:30")
+            init_db(db)
+            self.assertEqual(get_setting(db, "digest_schedule_time"), "10:00")
 
     def test_branded_digest_separates_new_and_existing(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -11,7 +11,7 @@ services:
       - key: DB_PATH
         value: /tmp/tender_radar.db
       - key: AUTO_COLLECT_INTERVAL_MINUTES
-        value: 60
+        value: 0
       - key: COOKIE_SECURE
         value: "true"
       - key: ADMIN_USERNAME

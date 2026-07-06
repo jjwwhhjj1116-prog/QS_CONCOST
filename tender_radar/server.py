@@ -35,6 +35,7 @@ class Handler(BaseHTTPRequestHandler):
     session_lock = threading.Lock()
     login_failures: dict[str, list[float]] = {}
     digest_lock = threading.Lock()
+    collection_lock = threading.Lock()
 
     def _json(self, value: object, status: int = 200) -> None:
         data = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -137,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.settings.db_path, "digest_from_email", os.getenv("DIGEST_FROM_EMAIL", "")
                 ),
                 "enabled": get_setting(self.settings.db_path, "digest_enabled", "1") == "1",
-                "schedule_time": get_setting(self.settings.db_path, "digest_schedule_time", "08:30"),
+                "schedule_time": get_setting(self.settings.db_path, "digest_schedule_time", "10:00"),
                 "timezone": "Asia/Seoul",
                 "storage_persistent": os.getenv("DB_PATH", "").startswith("/var/data/"),
             })
@@ -221,12 +222,26 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if parsed.path == "/api/automation/digest":
+        if parsed.path in {"/api/automation/collect", "/api/automation/digest"}:
             expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
             supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
             if not expected or not secrets.compare_digest(expected, supplied):
-                self._json({"error": "인증되지 않은 예약 발송 요청입니다."}, 401)
+                self._json({"error": "인증되지 않은 자동화 요청입니다."}, 401)
                 return
+        if parsed.path == "/api/automation/collect":
+            if not self.collection_lock.acquire(blocking=False):
+                self._json({"error": "이미 수집 작업이 진행 중입니다."}, 409)
+                return
+            try:
+                from .cli import collect
+                result = collect()
+                self._json({"ok": result == 0, "collected": True}, 200 if result == 0 else 502)
+            except Exception as exc:
+                self._json({"error": str(exc)}, 502)
+            finally:
+                self.collection_lock.release()
+            return
+        if parsed.path == "/api/automation/digest":
             if get_setting(self.settings.db_path, "digest_enabled", "1") != "1":
                 self._json({"ok": True, "skipped": True, "reason": "예약 발송 꺼짐"})
                 return
@@ -234,8 +249,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "이미 발송 작업이 진행 중입니다."}, 409)
                 return
             try:
-                from .cli import collect
-                collect()
                 self._json(send_email_digest(self.settings.db_path))
             except Exception as exc:
                 self._json({"error": str(exc)}, 502)
@@ -335,7 +348,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/admin/email-settings":
             resend_api_key = str(payload.get("resend_api_key", "")).strip()
             from_email = str(payload.get("from_email", "")).strip()
-            schedule_time = str(payload.get("schedule_time", "08:30")).strip()
+            schedule_time = str(payload.get("schedule_time", "10:00")).strip()
             if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", schedule_time):
                 self._json({"error": "발송 시간 형식이 올바르지 않습니다."}, 400)
                 return

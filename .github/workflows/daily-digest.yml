@@ -1,9 +1,9 @@
-name: CONCOST weekday email digest
+name: CONCOST daily email digest
 
 on:
   schedule:
-    # 23:30 UTC Sunday-Thursday = 08:30 KST Monday-Friday
-    - cron: "30 23 * * 0-4"
+    # 01:00 UTC = 10:00 KST every day
+    - cron: "0 1 * * *"
   workflow_dispatch:
 
 jobs:
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Wake service, collect data, and send digest
+      - name: Wake service and send digest
         env:
           DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
         run: |
