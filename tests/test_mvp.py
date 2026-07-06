@@ -6,7 +6,7 @@ from tender_radar.db import (
     connect, delete_digest_recipient, list_digest_recipients, save_digest_recipient,
     list_notices, upsert_notice,
 )
-from tender_radar.email_digest import build_email_digest
+from tender_radar.email_digest import build_email_digest, build_resend_request
 from tender_radar.g2b import normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
@@ -89,6 +89,11 @@ class MVPTests(unittest.TestCase):
             self.assertEqual(second["counts"]["new_notices"], 0)
             self.assertEqual(second["counts"]["old_notices"], 1)
             self.assertIn("기존 알림 프로젝트", second["html"])
+
+    def test_resend_request_has_required_user_agent(self):
+        request = build_resend_request("test-key", b"{}")
+        self.assertIn("QS-CONCOST", request.get_header("User-agent"))
+        self.assertEqual(request.get_header("Accept"), "application/json")
 
 
 if __name__ == "__main__":

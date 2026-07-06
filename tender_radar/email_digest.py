@@ -16,10 +16,23 @@ from .secrets_store import get_secret
 
 SEOUL = ZoneInfo("Asia/Seoul")
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+RESEND_USER_AGENT = "QS-CONCOST/1.0 (+https://qs-concost.onrender.com/)"
 
 
 def valid_email(value: str) -> bool:
     return bool(EMAIL_RE.fullmatch(value.strip()))
+
+
+def build_resend_request(api_key: str, payload: bytes) -> Request:
+    return Request(
+        "https://api.resend.com/emails", data=payload, method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": RESEND_USER_AGENT,
+        },
+    )
 
 
 def _rows(db_path: Path, kind: str, already_sent: bool, limit: int) -> list[dict]:
@@ -193,15 +206,14 @@ def send_email_digest(db_path: Path, website_url: str = "https://qs-concost.onre
         "from": from_email, "to": recipients, "subject": digest["subject"],
         "html": digest["html"], "text": digest["text"],
     }, ensure_ascii=False).encode("utf-8")
-    request = Request(
-        "https://api.resend.com/emails", data=payload, method="POST",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-    )
+    request = build_resend_request(api_key, payload)
     try:
         with urlopen(request, timeout=30) as response:
             response_data = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         error = exc.read().decode("utf-8", errors="replace")[:1000]
+        if "error code: 1010" in error.lower():
+            error = "Resend가 요청 식별 헤더를 차단했습니다(1010). 최신 서버 코드로 다시 실행하세요."
         with connect(db_path) as conn:
             conn.execute(
                 "UPDATE digest_deliveries SET status='failed',completed_at=?,error=? WHERE id=?",
