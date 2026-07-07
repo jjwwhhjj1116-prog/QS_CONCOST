@@ -401,6 +401,7 @@ def stats(db_path: Path) -> dict[str, int]:
             ,SUM(CASE WHEN source='나라장터' THEN 1 ELSE 0 END) g2b_count
             ,SUM(CASE WHEN source='LH' THEN 1 ELSE 0 END) lh_count
             ,SUM(CASE WHEN source='도로공사' THEN 1 ELSE 0 END) ex_count
+            ,SUM(CASE WHEN source='공동주택관리정보시스템' THEN 1 ELSE 0 END) kapt_count
             FROM notices"""
         ).fetchone()
     return {key: int(row[key] or 0) for key in row.keys()}

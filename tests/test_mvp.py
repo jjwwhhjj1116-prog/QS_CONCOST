@@ -11,6 +11,7 @@ from tender_radar.email_digest import build_email_digest, build_resend_request, 
 from tender_radar.g2b import normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
+from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.scoring import score_notice
 
 
@@ -43,6 +44,22 @@ class MVPTests(unittest.TestCase):
         notice = normalize_lh_item({"bidNum": "2600001", "bidnmKor": "공사비 검증 용역", "cstrtnJobGbNm": "용역", "bidKind": "정정공고"})
         self.assertEqual(notice["source"], "LH")
         self.assertEqual(notice["notice_type"], "개정")
+
+    def test_parse_and_normalize_kapt_notice(self):
+        html = """<table><tbody><tr class='notice-row'>
+        <td onclick=\"goView('20260707125216962')\">1</td><td>K-APT</td><td>최저 낙찰</td>
+        <td>[울산] 균열보수 및 재도장공사업체 선정 공고</td><td>2026-07-20 17:00:00</td>
+        <td>신규공고</td><td>달동현대3차</td><td>2026-07-07 12:55:22</td>
+        </tr></tbody></table>"""
+        rows = parse_kapt_list(html)
+        self.assertEqual(len(rows), 1)
+        notice = normalize_kapt_item(rows[0])
+        self.assertEqual(notice["source"], "공동주택관리정보시스템")
+        self.assertEqual(notice["region"], "울산")
+        self.assertEqual(notice["category"], "공사")
+        self.assertGreaterEqual(notice["score"], 30)
+        self.assertIn("bidNum=20260707125216962", notice["url"])
+        self.assertEqual(notice["notice_type"], "신규")
 
     def test_normalize_ex_notice(self):
         notice = normalize_ex_item({"noti_no": "2026001", "bid_rev": 1, "noti_nm": "도로 설계용역", "noti_date": "20260703"}, "용역")
