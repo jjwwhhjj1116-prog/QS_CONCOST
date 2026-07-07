@@ -22,7 +22,7 @@ from .db import (
 from .official_news import collect_official_news
 from .law_news import collect_law_news
 from .collector import collect_all
-from .email_digest import build_email_digest, send_email_digest, valid_email
+from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
 from .secrets_store import get_secret, migrate_secret, set_secret
 
 
@@ -114,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_admin():
                 return
             self._json({
-                "api_key": get_secret(self.settings.db_path, "public_data_api_key"),
+                "api_key_configured": bool(get_secret(self.settings.db_path, "public_data_api_key")),
                 "law_api_configured": bool(get_secret(self.settings.db_path, "law_api_oc")),
             })
             return
@@ -161,6 +161,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         media_types = {
+            "/concost-app-icon.png": ("concost-app-icon.png", "image/png"),
             "/hero-construction.mp4": ("hero-construction.mp4", "video/mp4"),
             "/hero-construction.jpg": ("hero-construction.jpg", "image/jpeg"),
         }
@@ -281,6 +282,14 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 self.digest_lock.release()
             return
+        if parsed.path == "/api/admin/test-email":
+            if not self._require_admin():
+                return
+            try:
+                self._json(send_test_email(self.settings.db_path))
+            except Exception as exc:
+                self._json({"error": str(exc)}, 502)
+            return
         if parsed.path != "/api/collect":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -343,7 +352,11 @@ class Handler(BaseHTTPRequestHandler):
                 set_secret(self.settings.db_path, "public_data_api_key", api_key)
             if law_api_key:
                 set_secret(self.settings.db_path, "law_api_oc", law_api_key)
-            self._json({"ok": True, "law_api_configured": bool(get_secret(self.settings.db_path, "law_api_oc"))})
+            self._json({
+                "ok": True,
+                "api_key_configured": bool(get_secret(self.settings.db_path, "public_data_api_key")),
+                "law_api_configured": bool(get_secret(self.settings.db_path, "law_api_oc")),
+            })
             return
         if parsed.path == "/api/admin/email-settings":
             resend_api_key = str(payload.get("resend_api_key", "")).strip()

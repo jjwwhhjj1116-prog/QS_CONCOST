@@ -235,3 +235,40 @@ def send_email_digest(db_path: Path, website_url: str = "https://qs-concost.onre
         )
     return {"ok": True, "delivery_id": delivery_id, "provider_id": response_data.get("id", ""),
             "recipient_count": len(recipients), **counts}
+
+
+def send_test_email(db_path: Path) -> dict:
+    recipients = [x["email"] for x in list_digest_recipients(db_path) if x["is_active"]]
+    if not recipients:
+        raise ValueError("테스트 메일을 받을 활성 수신자가 없습니다.")
+    api_key = get_secret(db_path, "resend_api_key", os.getenv("RESEND_API_KEY", ""))
+    if not api_key:
+        raise ValueError("Resend API 키가 설정되지 않았습니다.")
+    from_email = get_setting(db_path, "digest_from_email", os.getenv("DIGEST_FROM_EMAIL", ""))
+    if not from_email:
+        raise ValueError("발신 이메일이 설정되지 않았습니다.")
+    recipient = recipients[0]
+    payload = json.dumps({
+        "from": from_email,
+        "to": [recipient],
+        "subject": "[CONCOST] 메일 발송 설정 테스트",
+        "html": (
+            "<div style='font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px'>"
+            "<h1 style='color:#ef5b00'>CONCOST</h1>"
+            "<h2>메일 발송 설정이 정상입니다.</h2>"
+            "<p>Resend API, 발신 도메인과 수신 주소 연결을 확인했습니다.</p>"
+            "<p style='color:#69737e'>이 메일은 관리자 설정의 발송 테스트로 전송되었습니다.</p>"
+            "</div>"
+        ),
+        "text": "CONCOST 메일 발송 설정이 정상입니다. 관리자 설정의 테스트 메일입니다.",
+    }, ensure_ascii=False).encode("utf-8")
+    try:
+        with urlopen(build_resend_request(api_key, payload), timeout=30) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        error = exc.read().decode("utf-8", errors="replace")[:1000]
+        raise RuntimeError(f"테스트 메일 발송 실패: {error}") from exc
+    return {
+        "ok": True, "recipient": recipient,
+        "provider_id": response_data.get("id", ""), "from_email": from_email,
+    }

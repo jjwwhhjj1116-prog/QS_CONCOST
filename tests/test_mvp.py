@@ -1,12 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tender_radar.db import (
     connect, delete_digest_recipient, list_digest_recipients, save_digest_recipient,
     get_setting, init_db, list_notices, set_setting, upsert_notice,
 )
-from tender_radar.email_digest import build_email_digest, build_resend_request
+from tender_radar.email_digest import build_email_digest, build_resend_request, send_test_email
 from tender_radar.g2b import normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
@@ -101,6 +102,26 @@ class MVPTests(unittest.TestCase):
         request = build_resend_request("test-key", b"{}")
         self.assertIn("QS-CONCOST", request.get_header("User-agent"))
         self.assertEqual(request.get_header("Accept"), "application/json")
+
+    def test_send_test_email_uses_first_active_recipient(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self):
+                return b'{"id":"mail-test-1"}'
+
+        with patch("tender_radar.email_digest.list_digest_recipients", return_value=[
+            {"email": "team@con-cost.com", "is_active": 1}
+        ]), patch("tender_radar.email_digest.get_secret", return_value="re_test"), patch(
+            "tender_radar.email_digest.get_setting", return_value="CONCOST <news@con-cost.com>"
+        ), patch("tender_radar.email_digest.urlopen", return_value=Response()):
+            result = send_test_email(Path("unused.db"))
+        self.assertEqual(result["recipient"], "team@con-cost.com")
+        self.assertEqual(result["provider_id"], "mail-test-1")
 
 
 if __name__ == "__main__":
