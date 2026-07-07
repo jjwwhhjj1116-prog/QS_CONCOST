@@ -60,8 +60,8 @@ class MVPTests(unittest.TestCase):
     def test_digest_recipient_address_book(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "test.db"
-            saved = save_digest_recipient(db, "TEAM@con-cost.com", "견적팀")
-            self.assertEqual(saved["email"], "team@con-cost.com")
+            saved = save_digest_recipient(db, "TEAM@con-cost.co.kr", "견적팀")
+            self.assertEqual(saved["email"], "team@con-cost.co.kr")
             self.assertEqual(len(list_digest_recipients(db)), 1)
             self.assertTrue(delete_digest_recipient(db, saved["id"]))
             self.assertEqual(list_digest_recipients(db), [])
@@ -115,12 +115,12 @@ class MVPTests(unittest.TestCase):
                 return b'{"id":"mail-test-1"}'
 
         with patch("tender_radar.email_digest.list_digest_recipients", return_value=[
-            {"email": "team@con-cost.com", "is_active": 1}
+            {"email": "team@con-cost.co.kr", "is_active": 1}
         ]), patch("tender_radar.email_digest.get_secret", return_value="re_test"), patch(
-            "tender_radar.email_digest.get_setting", return_value="CONCOST <news@con-cost.com>"
+            "tender_radar.email_digest.get_setting", return_value="CONCOST <news@con-cost.co.kr>"
         ), patch("tender_radar.email_digest.urlopen", return_value=Response()):
             result = send_test_email(Path("unused.db"))
-        self.assertEqual(result["recipient"], "team@con-cost.com")
+        self.assertEqual(result["recipient"], "team@con-cost.co.kr")
         self.assertEqual(result["provider_id"], "mail-test-1")
 
 

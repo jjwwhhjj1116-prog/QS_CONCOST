@@ -57,7 +57,7 @@ GitHub Pages는 Python 서버를 실행하지 못합니다. 전체 기능 배포
 - `ADMIN_BOOTSTRAP_PASSWORD`
 - `APP_SECRET_KEY` (서버 저장 인증값 암호화용 24자 이상 임의 문자열)
 - `RESEND_API_KEY` (SMTP 대신 HTTPS로 메일을 보내는 Resend API 키)
-- `DIGEST_FROM_EMAIL` (예: `CONCOST <news@con-cost.com>`)
+- `DIGEST_FROM_EMAIL` (예: `CONCOST <news@con-cost.co.kr>`)
 - `DIGEST_RECIPIENTS` (재시작 시 복원할 수신 주소, 쉼표 구분)
 - `DIGEST_TRIGGER_TOKEN` (예약 발송 API 인증용 임의 문자열)
 

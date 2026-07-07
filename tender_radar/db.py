@@ -169,6 +169,10 @@ def init_db(db_path: Path) -> None:
             "UPDATE app_settings SET setting_value='10:00' "
             "WHERE setting_key='digest_schedule_time' AND setting_value='08:30'"
         )
+        conn.execute(
+            "UPDATE app_settings SET setting_value=REPLACE(setting_value,'@con-cost.com','@con-cost.co.kr') "
+            "WHERE setting_key='digest_from_email' AND setting_value LIKE '%@con-cost.com%'"
+        )
 
 
 def _password_hash(password: str, salt_hex: str, iterations: int = PASSWORD_ITERATIONS) -> str:
