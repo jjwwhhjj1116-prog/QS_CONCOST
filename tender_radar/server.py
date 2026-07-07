@@ -349,9 +349,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "변경할 API 인증값을 입력하세요."}, 400)
                 return
             if api_key:
-                set_secret(self.settings.db_path, "public_data_api_key", api_key)
+                try:
+                    set_secret(self.settings.db_path, "public_data_api_key", api_key)
+                except RuntimeError as exc:
+                    self._json({"error": str(exc)}, 500)
+                    return
             if law_api_key:
-                set_secret(self.settings.db_path, "law_api_oc", law_api_key)
+                try:
+                    set_secret(self.settings.db_path, "law_api_oc", law_api_key)
+                except RuntimeError as exc:
+                    self._json({"error": str(exc)}, 500)
+                    return
             self._json({
                 "ok": True,
                 "api_key_configured": bool(get_secret(self.settings.db_path, "public_data_api_key")),
@@ -369,7 +377,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "발신 이메일 형식을 확인하세요."}, 400)
                 return
             if resend_api_key:
-                set_secret(self.settings.db_path, "resend_api_key", resend_api_key)
+                try:
+                    set_secret(self.settings.db_path, "resend_api_key", resend_api_key)
+                except RuntimeError as exc:
+                    self._json({"error": str(exc)}, 500)
+                    return
             if from_email:
                 set_setting(self.settings.db_path, "digest_from_email", from_email)
             set_setting(self.settings.db_path, "digest_enabled", "1" if payload.get("enabled", True) else "0")
