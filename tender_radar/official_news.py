@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 from .scoring import score_notice
+from .industry_news import collect_industry_news
 
 
 PPS_BOARDS = (
@@ -114,8 +115,8 @@ def collect_molit() -> list[dict[str, Any]]:
 
 def collect_official_news() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    collectors = (collect_pps, collect_molit)
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="official-news") as pool:
+    collectors = (collect_pps, collect_molit, collect_industry_news)
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="official-news") as pool:
         futures = [pool.submit(collector) for collector in collectors]
         for future in futures:
             try:

@@ -13,6 +13,7 @@ from tender_radar.g2b import normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
+from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
 from tender_radar.scoring import score_notice
 
 
@@ -72,6 +73,31 @@ class MVPTests(unittest.TestCase):
                 {row["email"] for row in list_digest_recipients(db)},
                 {"one@con-cost.co.kr", "two@con-cost.co.kr"},
             )
+
+    def test_parse_cerik_industry_news(self):
+        page = '''<div class="document-preview-slide-wrap"><div class="title">건설공사비 동향</div>
+        <b>출판일</b><span>2026-07-08</span><a href="/report/briefing/3102">요약보기</a></div>'''
+        rows = parse_cerik(page, "CERIK 동향브리핑", "https://www.cerik.re.kr/report/briefing")
+        self.assertEqual(rows[0]["source_key"], "3102")
+        self.assertEqual(rows[0]["published_at"], "2026-07-08")
+        self.assertIn("공사비", rows[0]["title"])
+
+    def test_parse_ricon_industry_news(self):
+        page = '''<table><tr><td class="col_sbj"><a href="/board/view.php?no=6141&amp;cate=7">
+        <span class="bo_ca">건설시장과 이슈</span><strong class="bo_sbj">2026년 건설수주동향</strong></a></td>
+        <td class="col_date">2026-06-30</td></tr></table>'''
+        rows = parse_ricon(page, "RICON 건설시장", "https://www.ricon.re.kr/")
+        self.assertEqual(rows[0]["source_key"], "6141")
+        self.assertEqual(rows[0]["published_at"], "2026-06-30")
+
+    def test_parse_constimes_keeps_links_not_article_body(self):
+        page = '''<a href="https://www.constimes.co.kr/news/articleView.html?idxno=312238">
+        <h2>재건축 공사비 검증 제도 본격화</h2></a>
+        <a href="https://www.constimes.co.kr/news/articleView.html?idxno=312237"><h2>임직원 채용 공고</h2></a>'''
+        rows = parse_constimes(page)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source_key"], "312238")
+        self.assertEqual(rows[0]["summary"], "")
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({

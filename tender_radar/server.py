@@ -147,6 +147,7 @@ class Handler(BaseHTTPRequestHandler):
                 "storage_persistent": persistent_db,
                 "environment_backed": environment_backed,
                 "resend_environment_backed": bool(os.getenv("RESEND_API_KEY", "").strip()),
+                "from_environment_backed": bool(os.getenv("DIGEST_FROM_EMAIL", "").strip()),
                 "recipients_environment_backed": bool(os.getenv("DIGEST_RECIPIENTS", "").strip()),
             })
             return
