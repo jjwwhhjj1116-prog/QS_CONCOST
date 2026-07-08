@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .scoring import score_notice
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notices (
@@ -173,6 +175,26 @@ def init_db(db_path: Path) -> None:
             "UPDATE app_settings SET setting_value=REPLACE(setting_value,'@con-cost.com','@con-cost.co.kr') "
             "WHERE setting_key='digest_from_email' AND setting_value LIKE '%@con-cost.com%'"
         )
+        # Scoring rules evolve with CONCOST's business model. Re-score stored data on startup
+        # so old notices do not retain construction-company-oriented scores.
+        for row in conn.execute(
+            "SELECT id,title,institution,region,category,source FROM notices"
+        ):
+            score, matched = score_notice(
+                row["title"], row["institution"], row["region"], row["category"], row["source"]
+            )
+            conn.execute(
+                "UPDATE notices SET score=?, matched_keywords=? WHERE id=?",
+                (score, json.dumps(matched, ensure_ascii=False), row["id"]),
+            )
+        for row in conn.execute("SELECT id,title,summary,source,category FROM news"):
+            score, matched = score_notice(
+                row["title"], row["summary"], row["source"], row["category"]
+            )
+            conn.execute(
+                "UPDATE news SET score=?, matched_keywords=? WHERE id=?",
+                (score, json.dumps(matched, ensure_ascii=False), row["id"]),
+            )
 
 
 def _password_hash(password: str, salt_hex: str, iterations: int = PASSWORD_ITERATIONS) -> str:

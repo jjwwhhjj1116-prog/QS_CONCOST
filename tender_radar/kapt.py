@@ -96,9 +96,6 @@ def normalize_item(item: dict[str, str]) -> dict[str, Any]:
     }.get(status, "신규")
     category = _category(title)
     score, matched = score_notice(title, apartment, region, category, "공동주택 아파트")
-    if category == "공사":
-        score = min(100, score + 8)
-        matched.append("공동주택:공사")
     bid_num = item.get("bid_num", "")
     return {
         "source": SOURCE,

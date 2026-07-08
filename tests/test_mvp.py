@@ -18,8 +18,36 @@ from tender_radar.scoring import score_notice
 class MVPTests(unittest.TestCase):
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
-        self.assertGreaterEqual(score, 60)
+        self.assertGreaterEqual(score, 70)
         self.assertTrue(any("공사비" in item for item in matched))
+
+    def test_concost_specialties_score_high(self):
+        cases = (
+            "재개발 정비사업 공사비 검증 용역",
+            "공사 계약금액 물가변동 ES 검토 용역",
+            "설계변경 정산 및 클레임 검토 용역",
+            "공동주택 정밀안전진단 용역",
+            "실시설계 개산견적 및 BOQ 작성 용역",
+            "해외 FED 내역서 및 구조 BIM 산출 용역",
+        )
+        for title in cases:
+            with self.subTest(title=title):
+                self.assertGreaterEqual(score_notice(title)[0], 65)
+
+    def test_direct_construction_is_not_a_concost_opportunity(self):
+        for title in (
+            "아파트 균열보수 및 재도장 공사업체 선정 공고",
+            "옥상 방수공사 시공업체 선정",
+            "승강기 교체공사 사업자 선정",
+            "청사 건축공사 입찰공고",
+        ):
+            with self.subTest(title=title):
+                self.assertLess(score_notice(title)[0], 20)
+
+    def test_cost_consulting_about_a_construction_still_scores_high(self):
+        score, matched = score_notice("아파트 재도장공사 공사비 산정 및 원가검토 용역")
+        self.assertGreaterEqual(score, 50)
+        self.assertTrue(any("직접시공 감점" in item for item in matched))
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({
@@ -57,7 +85,7 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(notice["source"], "공동주택관리정보시스템")
         self.assertEqual(notice["region"], "울산")
         self.assertEqual(notice["category"], "공사")
-        self.assertGreaterEqual(notice["score"], 30)
+        self.assertLess(notice["score"], 20)
         self.assertIn("bidNum=20260707125216962", notice["url"])
         self.assertEqual(notice["notice_type"], "신규")
 
