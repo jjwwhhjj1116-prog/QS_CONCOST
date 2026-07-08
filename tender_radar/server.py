@@ -298,6 +298,23 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json({"error": str(exc)}, 502)
             return
+        if parsed.path == "/api/admin/collect-news":
+            if not self._require_admin():
+                return
+            law_key = get_secret(self.settings.db_path, "law_api_oc")
+            news_items, news_sources = collect_news(law_key)
+            news_counts = {"inserted": 0, "updated": 0}
+            for item in news_items:
+                news_counts[upsert_news(self.settings.db_path, item)] += 1
+            if news_items:
+                prune_news(self.settings.db_path, news_items)
+            self._json({
+                "ok": any(item["ok"] for item in news_sources),
+                "total": len(news_items),
+                "sources": news_sources,
+                **news_counts,
+            }, 200 if any(item["ok"] for item in news_sources) else 502)
+            return
         if parsed.path != "/api/collect":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
