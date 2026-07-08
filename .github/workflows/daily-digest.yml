@@ -9,14 +9,9 @@ on:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - name: Wake service and send digest
-        env:
-          DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
+      - name: Wake service for the internal 10:00 KST mail scheduler
         run: |
-          test -n "$DIGEST_TRIGGER_TOKEN"
-          curl --fail-with-body --retry 3 --retry-all-errors --max-time 840 \
-            -X POST \
-            -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN" \
-            https://qs-concost.onrender.com/api/automation/digest
+          curl --fail --retry 5 --retry-all-errors --max-time 240 \
+            https://qs-concost.onrender.com/api/stats

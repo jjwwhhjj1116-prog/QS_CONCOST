@@ -124,7 +124,7 @@ def _fetch_page(page: int) -> list[dict[str, str]]:
         headers={"User-Agent": "CONCOST-QS-Radar/1.0", "Accept": "text/html"},
     )
     try:
-        with urlopen(request, timeout=30) as response:
+        with urlopen(request, timeout=12) as response:
             html = response.read().decode("utf-8", errors="replace")
     except HTTPError as exc:
         raise KaptError(f"HTTP {exc.code}: K-apt 공개목록 요청이 거절되었습니다.") from exc
@@ -139,7 +139,7 @@ def _fetch_page(page: int) -> list[dict[str, str]]:
 def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
     cutoff = datetime.now() - timedelta(hours=max(1, lookback_hours))
     result: list[dict[str, Any]] = []
-    for page in range(1, 11):
+    for page in range(1, 6):
         rows = _fetch_page(page)
         if not rows:
             break
@@ -152,7 +152,9 @@ def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
             if published < cutoff:
                 reached_cutoff = True
                 continue
-            result.append(normalize_item(item))
+            normalized = normalize_item(item)
+            if normalized["score"] > 20:
+                result.append(normalized)
         if reached_cutoff:
             break
     return result

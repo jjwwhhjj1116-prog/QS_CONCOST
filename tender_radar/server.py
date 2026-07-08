@@ -7,11 +7,13 @@ import secrets
 import threading
 import time
 import webbrowser
+from datetime import datetime
 from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .db import (
@@ -19,9 +21,7 @@ from .db import (
     delete_digest_recipient, list_digest_deliveries, list_digest_recipients,
     list_news, prune_news, save_digest_recipient, stats, update_status, upsert_news, upsert_notice,
 )
-from .official_news import collect_official_news
-from .law_news import collect_law_news
-from .collector import collect_all
+from .collector import collect_all, collect_news
 from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
 from .secrets_store import get_secret, migrate_secret, set_secret
 
@@ -130,6 +130,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/admin/email-settings":
             if not self._require_admin():
                 return
+            persistent_db = os.getenv("DB_PATH", "").startswith("/var/data/")
+            environment_backed = all(os.getenv(key, "").strip() for key in (
+                "RESEND_API_KEY", "DIGEST_FROM_EMAIL", "DIGEST_RECIPIENTS"
+            ))
             self._json({
                 "recipients": list_digest_recipients(self.settings.db_path),
                 "deliveries": list_digest_deliveries(self.settings.db_path),
@@ -140,7 +144,10 @@ class Handler(BaseHTTPRequestHandler):
                 "enabled": get_setting(self.settings.db_path, "digest_enabled", "1") == "1",
                 "schedule_time": get_setting(self.settings.db_path, "digest_schedule_time", "10:00"),
                 "timezone": "Asia/Seoul",
-                "storage_persistent": os.getenv("DB_PATH", "").startswith("/var/data/"),
+                "storage_persistent": persistent_db,
+                "environment_backed": environment_backed,
+                "resend_environment_backed": bool(os.getenv("RESEND_API_KEY", "").strip()),
+                "recipients_environment_backed": bool(os.getenv("DIGEST_RECIPIENTS", "").strip()),
             })
             return
         if parsed.path in {"/", "/index.html"}:
@@ -306,27 +313,14 @@ class Handler(BaseHTTPRequestHandler):
         counts = {"inserted": 0, "updated": 0, "unchanged": 0}
         for notice in notices:
             counts[upsert_notice(self.settings.db_path, notice)] += 1
-        news_counts = {"inserted": 0, "updated": 0}
-        try:
-            news_items = collect_official_news()
-            for item in news_items:
-                news_counts[upsert_news(self.settings.db_path, item)] += 1
-            prune_news(self.settings.db_path, news_items)
-            sources.append({"source": "공식 건설뉴스", "ok": True, "total": len(news_items)})
-        except Exception as exc:
-            sources.append({"source": "공식 건설뉴스", "ok": False, "total": 0, "error": str(exc)})
         law_key = get_secret(self.settings.db_path, "law_api_oc")
-        if law_key:
-            try:
-                law_items = collect_law_news(law_key)
-                for item in law_items:
-                    news_counts[upsert_news(self.settings.db_path, item)] += 1
-                prune_news(self.settings.db_path, law_items)
-                sources.append({"source": "국가법령정보", "ok": True, "total": len(law_items)})
-            except Exception as exc:
-                sources.append({"source": "국가법령정보", "ok": False, "total": 0, "error": str(exc)})
-        else:
-            sources.append({"source": "국가법령정보", "ok": False, "total": 0, "error": "API 인증값 미설정"})
+        news_items, news_sources = collect_news(law_key)
+        news_counts = {"inserted": 0, "updated": 0}
+        for item in news_items:
+            news_counts[upsert_news(self.settings.db_path, item)] += 1
+        if news_items:
+            prune_news(self.settings.db_path, news_items)
+        sources.extend(news_sources)
         self._json({
             "ok": any(item["ok"] for item in sources), "total": len(notices),
             "sources": sources, "news": news_counts, **counts,
@@ -465,6 +459,39 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
         worker = threading.Thread(target=auto_collect, name="auto-collector", daemon=True)
         worker.start()
     handler = type("ConfiguredHandler", (Handler,), {"settings": settings})
+    if os.getenv("SCHEDULE_JOBS", "1").lower() in {"1", "true", "yes"}:
+        def scheduled_jobs() -> None:
+            from .cli import collect
+            timezone = ZoneInfo("Asia/Seoul")
+            while True:
+                now = datetime.now(timezone)
+                today = now.date().isoformat()
+                minute = now.hour * 60 + now.minute
+                if 9 * 60 + 20 <= minute < 10 * 60:
+                    last = get_setting(settings.db_path, "last_scheduled_collect", "")
+                    if last != today and Handler.collection_lock.acquire(blocking=False):
+                        try:
+                            set_setting(settings.db_path, "last_scheduled_collect", today)
+                            collect()
+                        except Exception as exc:
+                            print(f"09:20 예약수집 실패: {exc}")
+                        finally:
+                            Handler.collection_lock.release()
+                # GitHub's scheduled wake-up can be delayed, so keep a one-hour recovery window.
+                if 10 * 60 <= minute < 11 * 60:
+                    last = get_setting(settings.db_path, "last_scheduled_digest", "")
+                    enabled = get_setting(settings.db_path, "digest_enabled", "1") == "1"
+                    if enabled and last != today and Handler.digest_lock.acquire(blocking=False):
+                        try:
+                            set_setting(settings.db_path, "last_scheduled_digest", today)
+                            send_email_digest(settings.db_path)
+                        except Exception as exc:
+                            print(f"10:00 예약메일 실패: {exc}")
+                        finally:
+                            Handler.digest_lock.release()
+                time.sleep(20)
+        scheduler = threading.Thread(target=scheduled_jobs, name="kst-scheduler", daemon=True)
+        scheduler.start()
     server = ThreadingHTTPServer((settings.host, settings.port), handler)
     url = f"http://{settings.host}:{settings.port}"
     print(f"QS 입찰 레이더: {url}")

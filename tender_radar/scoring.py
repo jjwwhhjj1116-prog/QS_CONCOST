@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+SCORING_VERSION = "concost-consulting-v2"
 
 # CONCOST는 시공사가 아니라 공사비·원가·안전·계약 전문 컨설팅 회사다.
 # 같은 업무군의 유사어가 한 제목에 반복되어도 최고 가중치 하나만 반영한다.

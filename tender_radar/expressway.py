@@ -56,7 +56,7 @@ def normalize_item(item: dict[str, Any], category: str) -> dict[str, Any]:
 def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
     opener = build_opener(HTTPCookieProcessor(CookieJar()))
     try:
-        with opener.open(Request(HOME_URL, headers={"User-Agent": "QS-Tender-Radar/0.2"}), timeout=30) as response:
+        with opener.open(Request(HOME_URL, headers={"User-Agent": "QS-Tender-Radar/0.2"}), timeout=12) as response:
             html = response.read().decode("utf-8", errors="replace")
         match = re.search(r'name="_csrf" content="([^"]+)"', html)
         if not match:
@@ -69,7 +69,7 @@ def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
                 "User-Agent": "QS-Tender-Radar/0.2", "Content-Type": "application/json;charset=UTF-8",
                 "Accept": "application/json", "X-CSRF-TOKEN": match.group(1), "menucode": "HOME",
             })
-            with opener.open(request, timeout=30) as response:
+            with opener.open(request, timeout=12) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             for item in payload.get("result_list", []):
                 date_text = str(item.get("noti_date") or "")
@@ -78,7 +78,9 @@ def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
                 except ValueError:
                     item_time = cutoff
                 if item_time >= cutoff - 86400:
-                    result.append(normalize_item(item, category))
+                    normalized = normalize_item(item, category)
+                    if normalized["score"] > 20:
+                        result.append(normalized)
         return result
     except ExpresswayError:
         raise

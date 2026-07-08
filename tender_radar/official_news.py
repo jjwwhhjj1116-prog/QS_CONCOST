@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import http.cookiejar
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import urljoin
 from urllib.request import HTTPCookieProcessor, Request, build_opener
@@ -36,7 +37,7 @@ CONSTRUCTION_CORE = ("시설공사", "건설", "건축", "토목", "주택", "�
 def _get(url: str) -> str:
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 CONCOST-Radar/1.0", "Accept": "text/html"})
     opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
-    with opener.open(request, timeout=30) as response:
+    with opener.open(request, timeout=10) as response:
         raw = response.read()
         charset = response.headers.get_content_charset() or "utf-8"
     return raw.decode(charset, errors="replace")
@@ -83,11 +84,14 @@ def collect_pps_board(source: str, board_key: str, category: str) -> list[dict[s
 
 def collect_pps() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for source, board_key, category in PPS_BOARDS:
+    def collect_board(args: tuple[str, str, str]) -> list[dict[str, Any]]:
         try:
-            result.extend(collect_pps_board(source, board_key, category))
+            return collect_pps_board(*args)
         except Exception:
-            continue
+            return []
+    with ThreadPoolExecutor(max_workers=len(PPS_BOARDS), thread_name_prefix="pps-board") as pool:
+        for rows in pool.map(collect_board, PPS_BOARDS):
+            result.extend(rows)
     return result
 
 
@@ -110,11 +114,14 @@ def collect_molit() -> list[dict[str, Any]]:
 
 def collect_official_news() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for collector in (collect_pps, collect_molit):
-        try:
-            result.extend(collector())
-        except Exception:
-            continue
+    collectors = (collect_pps, collect_molit)
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="official-news") as pool:
+        futures = [pool.submit(collector) for collector in collectors]
+        for future in futures:
+            try:
+                result.extend(future.result())
+            except Exception:
+                continue
     deduped: list[dict[str, Any]] = []
     seen_titles: set[str] = set()
     for item in result:

@@ -12,6 +12,8 @@ services:
         value: /tmp/tender_radar.db
       - key: AUTO_COLLECT_INTERVAL_MINUTES
         value: 0
+      - key: SCHEDULE_JOBS
+        value: "true"
       - key: COOKIE_SECURE
         value: "true"
       - key: ADMIN_USERNAME

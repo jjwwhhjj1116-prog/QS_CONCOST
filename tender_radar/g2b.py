@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -87,13 +88,14 @@ def _extract_payload(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], int
 
 
 def fetch_category(
-    service_key: str, category: str, start: datetime, end: datetime, rows: int = 100
+    service_key: str, category: str, start: datetime, end: datetime, rows: int = 500,
+    max_pages: int = 6,
 ) -> list[dict[str, Any]]:
     if category not in OPERATIONS:
         raise ValueError(f"지원하지 않는 분야: {category}")
     collected: list[dict[str, Any]] = []
-    page = 1
-    while True:
+    page, fetched = 1, 0
+    while page <= max_pages:
         params = {
             "serviceKey": service_key,
             "pageNo": page,
@@ -106,7 +108,7 @@ def fetch_category(
         url = f"{BASE_URL}/{OPERATIONS[category]}?{urlencode(params)}"
         request = Request(url, headers={"User-Agent": "QS-Tender-Radar/0.1"})
         try:
-            with urlopen(request, timeout=30) as response:
+            with urlopen(request, timeout=12) as response:
                 raw = response.read().decode("utf-8")
         except HTTPError as exc:
             try:
@@ -127,8 +129,10 @@ def fetch_category(
             preview = raw[:180].replace("\n", " ")
             raise G2BError(f"JSON이 아닌 응답입니다: {preview}") from exc
         items, total = _extract_payload(payload)
-        collected.extend(normalize_item(item, category) for item in items)
-        if not items or len(collected) >= total:
+        fetched += len(items)
+        normalized = (normalize_item(item, category) for item in items)
+        collected.extend(item for item in normalized if item["score"] > 20)
+        if not items or fetched >= total:
             break
         page += 1
     return collected
@@ -140,6 +144,7 @@ def collect_recent(service_key: str, lookback_hours: int = 48) -> list[dict[str,
     end = datetime.now()
     start = end - timedelta(hours=lookback_hours)
     result: list[dict[str, Any]] = []
-    for category in OPERATIONS:
-        result.extend(fetch_category(service_key, category, start, end))
+    with ThreadPoolExecutor(max_workers=len(OPERATIONS), thread_name_prefix="g2b-category") as pool:
+        for rows in pool.map(lambda category: fetch_category(service_key, category, start, end), OPERATIONS):
+            result.extend(rows)
     return result

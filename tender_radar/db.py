@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .scoring import score_notice
+from .scoring import SCORING_VERSION, score_notice
 
 
 SCHEMA = """
@@ -175,25 +175,34 @@ def init_db(db_path: Path) -> None:
             "UPDATE app_settings SET setting_value=REPLACE(setting_value,'@con-cost.com','@con-cost.co.kr') "
             "WHERE setting_key='digest_from_email' AND setting_value LIKE '%@con-cost.com%'"
         )
-        # Scoring rules evolve with CONCOST's business model. Re-score stored data on startup
-        # so old notices do not retain construction-company-oriented scores.
-        for row in conn.execute(
-            "SELECT id,title,institution,region,category,source FROM notices"
-        ):
-            score, matched = score_notice(
-                row["title"], row["institution"], row["region"], row["category"], row["source"]
-            )
+        scoring_version = conn.execute(
+            "SELECT setting_value FROM app_settings WHERE setting_key='scoring_version'"
+        ).fetchone()
+        if not scoring_version or scoring_version["setting_value"] != SCORING_VERSION:
+            for row in conn.execute(
+                "SELECT id,title,institution,region,category,source FROM notices"
+            ):
+                score, matched = score_notice(
+                    row["title"], row["institution"], row["region"], row["category"], row["source"]
+                )
+                conn.execute(
+                    "UPDATE notices SET score=?, matched_keywords=? WHERE id=?",
+                    (score, json.dumps(matched, ensure_ascii=False), row["id"]),
+                )
+            conn.execute("DELETE FROM notices WHERE score <= 20")
+            for row in conn.execute("SELECT id,title,summary,source,category FROM news"):
+                score, matched = score_notice(
+                    row["title"], row["summary"], row["source"], row["category"]
+                )
+                conn.execute(
+                    "UPDATE news SET score=?, matched_keywords=? WHERE id=?",
+                    (score, json.dumps(matched, ensure_ascii=False), row["id"]),
+                )
+            now = datetime.now().astimezone().isoformat(timespec="seconds")
             conn.execute(
-                "UPDATE notices SET score=?, matched_keywords=? WHERE id=?",
-                (score, json.dumps(matched, ensure_ascii=False), row["id"]),
-            )
-        for row in conn.execute("SELECT id,title,summary,source,category FROM news"):
-            score, matched = score_notice(
-                row["title"], row["summary"], row["source"], row["category"]
-            )
-            conn.execute(
-                "UPDATE news SET score=?, matched_keywords=? WHERE id=?",
-                (score, json.dumps(matched, ensure_ascii=False), row["id"]),
+                "INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES('scoring_version',?,?) "
+                "ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at",
+                (SCORING_VERSION, now),
             )
 
 

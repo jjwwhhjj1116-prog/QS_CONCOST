@@ -1,13 +1,14 @@
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
+from pathlib import Path
 
 from tender_radar.db import (
     connect, delete_digest_recipient, list_digest_recipients, save_digest_recipient,
     get_setting, init_db, list_notices, set_setting, upsert_notice,
 )
 from tender_radar.email_digest import build_email_digest, build_resend_request, send_test_email
+from tender_radar.collector import collect_all
 from tender_radar.g2b import normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
@@ -48,6 +49,29 @@ class MVPTests(unittest.TestCase):
         score, matched = score_notice("아파트 재도장공사 공사비 산정 및 원가검토 용역")
         self.assertGreaterEqual(score, 50)
         self.assertTrue(any("직접시공 감점" in item for item in matched))
+
+    def test_collection_drops_score_20_or_lower(self):
+        high = {"source": "테스트", "title": "공사비 검증", "score": 70}
+        low = {"source": "테스트", "title": "도장 시공", "score": 20}
+        with patch("tender_radar.collector.g2b.collect_recent", return_value=[high, low]), patch(
+            "tender_radar.collector.lh.collect_recent", return_value=[]
+        ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
+            "tender_radar.collector.kapt.collect_recent", return_value=[]
+        ):
+            notices, statuses = collect_all("key", 48)
+        self.assertEqual(notices, [high])
+        self.assertEqual(statuses[0]["filtered"], 1)
+
+    def test_recipient_environment_seed_survives_empty_database(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"DIGEST_RECIPIENTS": "one@con-cost.co.kr,two@con-cost.co.kr"}
+        ):
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            self.assertEqual(
+                {row["email"] for row in list_digest_recipients(db)},
+                {"one@con-cost.co.kr", "two@con-cost.co.kr"},
+            )
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({

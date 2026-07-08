@@ -66,15 +66,15 @@ def collect_recent(service_key: str, lookback_hours: int = 48) -> list[dict[str,
         raise LHError("공공데이터포털 API 키가 없습니다.")
     end = datetime.now()
     start = end - timedelta(hours=lookback_hours)
-    rows, page, result = 100, 1, []
-    while True:
+    rows, page, fetched, result = 500, 1, 0, []
+    while page <= 6:
         query = urlencode({
             "serviceKey": service_key, "numOfRows": rows, "pageNo": page,
             "tndrbidRegDtStart": start.strftime("%Y%m%d"),
             "tndrbidRegDtEnd": end.strftime("%Y%m%d"),
         })
         try:
-            with urlopen(Request(f"{BASE_URL}?{query}", headers={"User-Agent": "QS-Tender-Radar/0.2"}), timeout=30) as response:
+            with urlopen(Request(f"{BASE_URL}?{query}", headers={"User-Agent": "QS-Tender-Radar/0.2"}), timeout=12) as response:
                 raw = response.read()
         except HTTPError as exc:
             raise LHError(f"HTTP {exc.code}: LH 입찰공고 API 활용신청 또는 승인 상태를 확인하세요.") from exc
@@ -93,9 +93,11 @@ def collect_recent(service_key: str, lookback_hours: int = 48) -> list[dict[str,
         if code not in {"00", "0"}:
             raise LHError(f"API 오류 {code}: {message}")
         items = [{child.tag: (child.text or "").strip() for child in node} for node in root.findall(".//item")]
-        result.extend(normalize_item(item) for item in items)
-        total = int(root.findtext(".//totalCount") or len(result))
-        if not items or len(result) >= total:
+        fetched += len(items)
+        normalized = (normalize_item(item) for item in items)
+        result.extend(item for item in normalized if item["score"] > 20)
+        total = int(root.findtext(".//totalCount") or fetched)
+        if not items or fetched >= total:
             break
         page += 1
     return result

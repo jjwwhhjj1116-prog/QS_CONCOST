@@ -5,9 +5,7 @@ import time
 
 from .config import get_settings
 from .db import init_db, prune_news, upsert_news, upsert_notice
-from .collector import collect_all
-from .law_news import collect_law_news
-from .official_news import collect_official_news
+from .collector import collect_all, collect_news
 from .secrets_store import get_secret, migrate_secret
 
 
@@ -23,13 +21,11 @@ def collect() -> int:
     for source in sources:
         state = f"{source['total']}건" if source["ok"] else f"실패 - {source['error']}"
         print(f"{source['source']}: {state}")
-    news_items = collect_official_news()
     law_key = get_secret(settings.db_path, "law_api_oc")
-    if law_key:
-        try:
-            news_items.extend(collect_law_news(law_key))
-        except Exception as exc:
-            print(f"국가법령정보: 실패 - {exc}")
+    news_items, news_sources = collect_news(law_key)
+    for source in news_sources:
+        if not source["ok"]:
+            print(f"{source['source']}: 실패 - {source['error']}")
     news_counts = {"inserted": 0, "updated": 0}
     for item in news_items:
         news_counts[upsert_news(settings.db_path, item)] += 1

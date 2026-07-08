@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urlencode, urljoin
@@ -32,7 +33,7 @@ def collect_law_news(oc: str, days: int = 90) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     rows: list[dict[str, Any]] = []
-    for query in LAW_QUERIES:
+    def fetch_query(query: str) -> list[dict[str, Any]]:
         params = {
             "OC": oc,
             "target": "law",
@@ -46,13 +47,16 @@ def collect_law_news(oc: str, days: int = 90) -> list[dict[str, Any]]:
             LAW_SEARCH_URL + "?" + urlencode(params),
             headers={"User-Agent": "CONCOST-Opportunity-Radar/1.0"},
         )
-        with urlopen(request, timeout=30) as response:
+        with urlopen(request, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8-sig"))
         root = payload.get("LawSearch", payload)
         query_rows = root.get("law", []) if isinstance(root, dict) else []
         if isinstance(query_rows, dict):
             query_rows = [query_rows]
-        rows.extend(row for row in query_rows if isinstance(row, dict))
+        return [row for row in query_rows if isinstance(row, dict)]
+    with ThreadPoolExecutor(max_workers=len(LAW_QUERIES), thread_name_prefix="law-query") as pool:
+        for query_rows in pool.map(fetch_query, LAW_QUERIES):
+            rows.extend(query_rows)
     for row in rows:
         if not isinstance(row, dict):
             continue
