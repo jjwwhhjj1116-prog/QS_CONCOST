@@ -33,7 +33,7 @@ def collect() -> int:
         prune_news(settings.db_path, news_items)
     print(f"뉴스·법령: {len(news_items)}건 / 신규 {news_counts['inserted']} / 갱신 {news_counts['updated']}")
     print(f"수집 완료: {len(notices)}건 / 신규 {counts['inserted']} / 변경 {counts['updated']} / 기존 {counts['unchanged']}")
-    return 0 if any(source["ok"] for source in sources) else 1
+    return 0 if any(source["ok"] for source in [*sources, *news_sources]) else 1
 
 
 def main() -> int:

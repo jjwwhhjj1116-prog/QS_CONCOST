@@ -131,24 +131,33 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_admin():
                 return
             persistent_db = os.getenv("DB_PATH", "").startswith("/var/data/")
+            resend_env = bool(os.getenv("RESEND_API_KEY", "").strip())
+            from_env = bool(os.getenv("DIGEST_FROM_EMAIL", "").strip())
+            recipients_env = bool(os.getenv("DIGEST_RECIPIENTS", "").strip())
             environment_backed = all(os.getenv(key, "").strip() for key in (
                 "RESEND_API_KEY", "DIGEST_FROM_EMAIL", "DIGEST_RECIPIENTS"
             ))
+            recipients = list_digest_recipients(self.settings.db_path)
+            provider_configured = bool(get_secret(self.settings.db_path, "resend_api_key"))
+            from_email = get_setting(
+                self.settings.db_path, "digest_from_email", os.getenv("DIGEST_FROM_EMAIL", "")
+            )
             self._json({
-                "recipients": list_digest_recipients(self.settings.db_path),
+                "recipients": recipients,
                 "deliveries": list_digest_deliveries(self.settings.db_path),
-                "provider_configured": bool(get_secret(self.settings.db_path, "resend_api_key")),
-                "from_email": get_setting(
-                    self.settings.db_path, "digest_from_email", os.getenv("DIGEST_FROM_EMAIL", "")
-                ),
+                "provider_configured": provider_configured,
+                "from_email": from_email,
                 "enabled": get_setting(self.settings.db_path, "digest_enabled", "1") == "1",
                 "schedule_time": get_setting(self.settings.db_path, "digest_schedule_time", "10:00"),
                 "timezone": "Asia/Seoul",
                 "storage_persistent": persistent_db,
                 "environment_backed": environment_backed,
-                "resend_environment_backed": bool(os.getenv("RESEND_API_KEY", "").strip()),
-                "from_environment_backed": bool(os.getenv("DIGEST_FROM_EMAIL", "").strip()),
-                "recipients_environment_backed": bool(os.getenv("DIGEST_RECIPIENTS", "").strip()),
+                "resend_environment_backed": resend_env,
+                "from_environment_backed": from_env,
+                "recipients_environment_backed": recipients_env,
+                "resend_permanent": provider_configured and (resend_env or persistent_db),
+                "from_permanent": bool(from_email) and (from_env or persistent_db),
+                "recipients_permanent": bool(recipients) and (recipients_env or persistent_db),
             })
             return
         if parsed.path in {"/", "/index.html"}:

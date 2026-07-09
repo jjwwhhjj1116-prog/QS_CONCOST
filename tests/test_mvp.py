@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -62,6 +63,22 @@ class MVPTests(unittest.TestCase):
             notices, statuses = collect_all("key", 48)
         self.assertEqual(notices, [high])
         self.assertEqual(statuses[0]["filtered"], 1)
+
+    def test_collection_timeout_does_not_fail_fast_sources(self):
+        def slow_source(*_):
+            time.sleep(0.2)
+            return [{"source": "나라장터", "title": "공사비 검증", "score": 70}]
+
+        with patch("tender_radar.collector.g2b.collect_recent", side_effect=slow_source), patch(
+            "tender_radar.collector.lh.collect_recent", return_value=[]
+        ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
+            "tender_radar.collector.kapt.collect_recent", return_value=[]
+        ):
+            notices, statuses = collect_all("key", 48, source_timeout_seconds=0.05)
+        self.assertEqual(notices, [])
+        self.assertFalse(statuses[0]["ok"])
+        self.assertIn("제한시간", statuses[0]["error"])
+        self.assertTrue(all(status["ok"] for status in statuses[1:]))
 
     def test_recipient_environment_seed_survives_empty_database(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(

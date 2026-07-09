@@ -9,7 +9,7 @@ services:
       - key: HOST
         value: 0.0.0.0
       - key: DB_PATH
-        value: /tmp/tender_radar.db
+        value: /var/data/tender_radar.db
       - key: AUTO_COLLECT_INTERVAL_MINUTES
         value: 0
       - key: SCHEDULE_JOBS
@@ -34,3 +34,7 @@ services:
         sync: false
       - key: DIGEST_TRIGGER_TOKEN
         sync: false
+    disk:
+      name: qs-concost-data
+      mountPath: /var/data
+      sizeGB: 1
