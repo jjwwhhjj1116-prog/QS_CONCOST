@@ -7,6 +7,7 @@ import secrets
 import threading
 import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.cookies import SimpleCookie
 from http import HTTPStatus
@@ -336,22 +337,27 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError, json.JSONDecodeError):
             self._json({"error": "입력값을 확인하세요."}, 400)
             return
-        notices, sources = collect_all(service_key, lookback_hours)
+        law_key = get_secret(self.settings.db_path, "law_api_oc")
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="manual-refresh") as pool:
+            bid_future = pool.submit(collect_all, service_key, lookback_hours, 45)
+            news_future = pool.submit(collect_news, law_key, 30)
+            notices, sources = bid_future.result()
+            news_items, news_sources = news_future.result()
         counts = {"inserted": 0, "updated": 0, "unchanged": 0}
         for notice in notices:
             counts[upsert_notice(self.settings.db_path, notice)] += 1
-        law_key = get_secret(self.settings.db_path, "law_api_oc")
-        news_items, news_sources = collect_news(law_key)
         news_counts = {"inserted": 0, "updated": 0}
         for item in news_items:
             news_counts[upsert_news(self.settings.db_path, item)] += 1
         if news_items:
             prune_news(self.settings.db_path, news_items)
         sources.extend(news_sources)
+        any_ok = any(item["ok"] for item in sources)
         self._json({
-            "ok": any(item["ok"] for item in sources), "total": len(notices),
+            "ok": any_ok, "partial": any_ok and any(not item["ok"] for item in sources),
+            "total": len(notices),
             "sources": sources, "news": news_counts, **counts,
-        }, 200 if any(item["ok"] for item in sources) else 502)
+        }, 200)
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)

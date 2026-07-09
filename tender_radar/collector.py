@@ -46,7 +46,7 @@ def _collect_with_deadline(
 def collect_all(
     service_key: str,
     lookback_hours: int,
-    source_timeout_seconds: float = 70,
+    source_timeout_seconds: float = 45,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     notices: list[dict[str, Any]] = []
     collectors = (
@@ -75,7 +75,7 @@ def collect_all(
 
 def collect_news(
     law_key: str,
-    source_timeout_seconds: float = 45,
+    source_timeout_seconds: float = 30,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     collectors: list[tuple[str, Any]] = [("공식 건설뉴스", official_news.collect_official_news)]
     if law_key:
