@@ -47,7 +47,7 @@
     <section class="panel"><div class="panel-head"><h2 id="settingsTitle">관리자 모드</h2><button class="close" id="closeSettings" aria-label="닫기">×</button></div><div class="panel-body">
       <div id="loginView" class="login-box"><label class="label" for="adminId">관리자 아이디</label><input id="adminId" autocomplete="username"><label class="label" for="adminPassword">비밀번호</label><input id="adminPassword" type="password" autocomplete="current-password"><div class="actions"><button class="button" id="adminLogin">로그인</button></div><div class="result" id="loginResult"></div></div>
       <div id="adminView" class="hidden"><div class="admin-title"><h3>공공입찰 수집 설정</h3><button class="button danger" id="adminLogout">로그아웃</button></div>
-        <div class="config-overview"><div class="config-card"><small>나라장터·LH API</small><span class="config-pill" id="g2bApiStatus">확인 중</span></div><div class="config-card"><small>국가법령정보 API</small><span class="config-pill" id="lawApiStatus">확인 중</span></div><div class="config-card"><small>자료 자동수집</small><span class="config-pill ok">매일 09:20</span></div></div>
+        <div class="config-overview"><div class="config-card"><small>나라장터·LH API</small><span class="config-pill" id="g2bApiStatus">확인 중</span></div><div class="config-card"><small>국가법령정보 API</small><span class="config-pill" id="lawApiStatus">확인 중</span></div><div class="config-card"><small>자료 자동수집</small><span class="config-pill ok">월~금 09:00</span></div></div>
         <div class="setting-heading"><label class="label" for="apiKey">공공데이터포털 일반 인증키 (나라장터·LH 공용)</label><span class="config-pill" id="g2bApiInputStatus">저장 상태 확인 중</span></div>
         <div class="key-row"><input id="apiKey" type="password" autocomplete="new-password" placeholder="변경할 때만 새 인증키 입력"><button class="button secondary" id="toggleKey">보기</button></div>
         <p class="hint">인증값은 Windows 사용자 암호화로 서버에 저장됩니다.</p>
@@ -66,7 +66,7 @@
         </ol></div>
         <hr class="divider">
         <section class="email-admin">
-          <div class="admin-title"><div><h3>매일 아침 자료 수집·이메일 브리핑</h3><p class="hint">09:20에 자료를 갱신하고, 입찰공고 · 건설뉴스 · 법규 개정을 신규/기존으로 나눠 10:00에 발송합니다.</p></div><span class="schedule-chip">● 매일 수집 09:20 · 발송 10:00</span></div>
+          <div class="admin-title"><div><h3>평일 아침 자료 수집·이메일 브리핑</h3><p class="hint">월~금 09:00에 자료를 갱신하고, 입찰공고 · 건설뉴스 · 법규 개정을 신규/기존으로 나눠 10:00에 주소록으로 발송합니다.</p></div><span class="schedule-chip">● 월~금 수집 09:00 · 발송 10:00</span></div>
           <div class="config-overview"><div class="config-card"><small>Resend API</small><span class="config-pill" id="resendApiStatus">확인 중</span></div><div class="config-card"><small>발신 주소</small><span class="config-pill" id="fromEmailStatus">확인 중</span></div><div class="config-card"><small>알림 주소록</small><span class="config-pill" id="recipientStatus">확인 중</span></div></div>
           <div class="storage-warning" id="storageWarning">메일 설정 보존 상태를 확인하고 있습니다.</div>
           <label class="label" for="digestFromEmail">발신자 이메일</label>

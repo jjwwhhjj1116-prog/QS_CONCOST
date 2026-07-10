@@ -2,8 +2,8 @@ name: CONCOST daily data collection
 
 on:
   schedule:
-    # 00:20 UTC = 09:20 KST every day
-    - cron: "20 0 * * *"
+    # 00:00 UTC = 09:00 KST, Monday-Friday
+    - cron: "0 0 * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Wake service for the internal 09:20 KST scheduler
+      - name: Wake service for the internal 09:00 KST weekday scheduler
         run: |
           curl --fail --retry 5 --retry-all-errors --max-time 240 \
             https://qs-concost.onrender.com/api/stats

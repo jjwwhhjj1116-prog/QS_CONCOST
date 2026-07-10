@@ -1,6 +1,7 @@
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
 from tender_radar.scoring import score_notice
+from tender_radar.server import in_collect_window, in_digest_window
 
 
 class MVPTests(unittest.TestCase):
@@ -184,6 +186,16 @@ class MVPTests(unittest.TestCase):
             set_setting(db, "digest_schedule_time", "08:30")
             init_db(db)
             self.assertEqual(get_setting(db, "digest_schedule_time"), "10:00")
+
+    def test_weekday_automation_windows(self):
+        friday_collect = datetime(2026, 7, 10, 9, 0)
+        friday_digest = datetime(2026, 7, 10, 10, 0)
+        saturday_collect = datetime(2026, 7, 11, 9, 0)
+        self.assertTrue(in_collect_window(friday_collect))
+        self.assertFalse(in_collect_window(friday_digest))
+        self.assertTrue(in_digest_window(friday_digest))
+        self.assertFalse(in_collect_window(saturday_collect))
+        self.assertFalse(in_digest_window(saturday_collect.replace(hour=10)))
 
     def test_branded_digest_separates_new_and_existing(self):
         with tempfile.TemporaryDirectory() as tmp:

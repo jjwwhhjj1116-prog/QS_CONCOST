@@ -31,6 +31,20 @@ from .secrets_store import get_secret, migrate_secret, set_secret
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+def is_kst_weekday(now: datetime) -> bool:
+    return now.weekday() < 5
+
+
+def in_collect_window(now: datetime) -> bool:
+    minute = now.hour * 60 + now.minute
+    return is_kst_weekday(now) and 9 * 60 <= minute < 10 * 60
+
+
+def in_digest_window(now: datetime) -> bool:
+    minute = now.hour * 60 + now.minute
+    return is_kst_weekday(now) and 10 * 60 <= minute < 11 * 60
+
+
 class Handler(BaseHTTPRequestHandler):
     settings: Settings
     sessions: dict[str, tuple[str, float]] = {}
@@ -637,19 +651,18 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
             while True:
                 now = datetime.now(timezone)
                 today = now.date().isoformat()
-                minute = now.hour * 60 + now.minute
-                if 9 * 60 + 20 <= minute < 10 * 60:
+                if in_collect_window(now):
                     last = get_setting(settings.db_path, "last_scheduled_collect", "")
                     if last != today and Handler.collection_lock.acquire(blocking=False):
                         try:
                             set_setting(settings.db_path, "last_scheduled_collect", today)
                             collect()
                         except Exception as exc:
-                            print(f"09:20 예약수집 실패: {exc}")
+                            print(f"09:00 예약수집 실패: {exc}")
                         finally:
                             Handler.collection_lock.release()
                 # GitHub's scheduled wake-up can be delayed, so keep a one-hour recovery window.
-                if 10 * 60 <= minute < 11 * 60:
+                if in_digest_window(now):
                     last = get_setting(settings.db_path, "last_scheduled_digest", "")
                     enabled = get_setting(settings.db_path, "digest_enabled", "1") == "1"
                     if enabled and last != today and Handler.digest_lock.acquire(blocking=False):
