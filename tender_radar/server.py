@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from http.cookies import SimpleCookie
 from http import HTTPStatus
@@ -23,6 +23,7 @@ from .db import (
     list_news, prune_news, save_digest_recipient, stats, update_status, upsert_news, upsert_notice,
 )
 from .collector import collect_all, collect_news
+from . import expressway, g2b, kapt, law_news, lh, official_news
 from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
 from .secrets_store import get_secret, migrate_secret, set_secret
 
@@ -37,6 +38,8 @@ class Handler(BaseHTTPRequestHandler):
     login_failures: dict[str, list[float]] = {}
     digest_lock = threading.Lock()
     collection_lock = threading.Lock()
+    collection_jobs: dict[str, dict] = {}
+    collection_jobs_lock = threading.Lock()
 
     def _json(self, value: object, status: int = 200) -> None:
         data = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -78,6 +81,125 @@ class Handler(BaseHTTPRequestHandler):
             "Set-Cookie",
             f"qs_admin_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{secure}",
         )
+
+    @classmethod
+    def _update_collection_job(cls, job_id: str, **updates: object) -> None:
+        with cls.collection_jobs_lock:
+            job = cls.collection_jobs.get(job_id)
+            if not job:
+                return
+            job.update(updates)
+            job["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    @classmethod
+    def _append_collection_source(cls, job_id: str, source_status: dict) -> None:
+        with cls.collection_jobs_lock:
+            job = cls.collection_jobs.get(job_id)
+            if not job:
+                return
+            job["sources"].append(source_status)
+            done = len(job["sources"])
+            total = max(1, int(job.get("source_total") or 1))
+            job["percent"] = min(99, round(done / total * 100))
+            job["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    @classmethod
+    def _get_collection_job(cls, job_id: str) -> dict | None:
+        with cls.collection_jobs_lock:
+            job = cls.collection_jobs.get(job_id)
+            return json.loads(json.dumps(job, ensure_ascii=False)) if job else None
+
+    @classmethod
+    def _latest_running_collection_job(cls) -> dict | None:
+        with cls.collection_jobs_lock:
+            running = [job for job in cls.collection_jobs.values() if job.get("status") == "running"]
+            if not running:
+                return None
+            return json.loads(json.dumps(sorted(running, key=lambda item: item["started_at"])[-1], ensure_ascii=False))
+
+    def _run_collection_job(self, job_id: str, service_key: str, law_key: str, lookback_hours: int) -> None:
+        def save_notices(rows: list[dict]) -> dict[str, int]:
+            counts = {"inserted": 0, "updated": 0, "unchanged": 0}
+            for notice in rows:
+                counts[upsert_notice(self.settings.db_path, notice)] += 1
+            return counts
+
+        def save_news(rows: list[dict]) -> dict[str, int]:
+            counts = {"inserted": 0, "updated": 0}
+            for item in rows:
+                counts[upsert_news(self.settings.db_path, item)] += 1
+            if rows:
+                prune_news(self.settings.db_path, rows)
+            return counts
+
+        notice_jobs = (
+            ("나라장터", lambda: g2b.collect_recent(service_key, lookback_hours)),
+            ("LH", lambda: lh.collect_recent(service_key, lookback_hours)),
+            ("도로공사", lambda: expressway.collect_recent(lookback_hours)),
+            ("공동주택관리정보시스템", lambda: kapt.collect_recent(lookback_hours)),
+        )
+        news_jobs: list[tuple[str, object]] = [("공식 건설뉴스", official_news.collect_official_news)]
+        if law_key:
+            news_jobs.append(("국가법령정보", lambda: law_news.collect_law_news(law_key)))
+        jobs = [("notice", source, collect) for source, collect in notice_jobs]
+        jobs.extend(("news", source, collect) for source, collect in news_jobs)
+        self._update_collection_job(job_id, source_total=len(jobs) + (0 if law_key else 1))
+        if not law_key:
+            self._append_collection_source(job_id, {
+                "source": "국가법령정보", "ok": False, "total": 0, "error": "API 인증값 미설정",
+            })
+        totals = {
+            "total": 0, "inserted": 0, "updated": 0, "unchanged": 0,
+            "news_inserted": 0, "news_updated": 0,
+        }
+        try:
+            with ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="collection-job") as pool:
+                futures = {pool.submit(collect): (kind, source) for kind, source, collect in jobs}
+                for future in as_completed(futures):
+                    kind, source = futures[future]
+                    try:
+                        rows = list(future.result() or [])
+                        if kind == "notice":
+                            relevant = [row for row in rows if int(row.get("score") or 0) > 20]
+                            counts = save_notices(relevant)
+                            totals["total"] += len(relevant)
+                            totals["inserted"] += counts["inserted"]
+                            totals["updated"] += counts["updated"]
+                            totals["unchanged"] += counts["unchanged"]
+                            self._append_collection_source(job_id, {
+                                "source": source, "ok": True, "total": len(relevant),
+                                "filtered": len(rows) - len(relevant),
+                            })
+                        else:
+                            counts = save_news(rows)
+                            totals["news_inserted"] += counts["inserted"]
+                            totals["news_updated"] += counts["updated"]
+                            self._append_collection_source(job_id, {
+                                "source": source, "ok": True, "total": len(rows),
+                            })
+                    except Exception as exc:
+                        self._append_collection_source(job_id, {
+                            "source": source, "ok": False, "total": 0, "error": str(exc),
+                        })
+                    self._update_collection_job(job_id, **totals, message="수집된 자료부터 화면에 반영하고 있습니다.")
+        except Exception as exc:
+            self._append_collection_source(job_id, {
+                "source": "수집 작업", "ok": False, "total": 0, "error": str(exc),
+            })
+        finally:
+            job = self._get_collection_job(job_id) or {}
+            ok_count = sum(1 for source in job.get("sources", []) if source.get("ok"))
+            self._update_collection_job(
+                job_id,
+                status="complete",
+                ok=ok_count > 0,
+                partial=any(not source.get("ok") for source in job.get("sources", [])),
+                percent=100,
+                message="수집 완료" if ok_count else "수집된 자료가 없습니다. API 승인상태와 기관 응답상태를 확인하세요.",
+                completed_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                **totals,
+            )
+            self.collection_lock.release()
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -160,6 +282,16 @@ class Handler(BaseHTTPRequestHandler):
                 "from_permanent": bool(from_email) and (from_env or persistent_db),
                 "recipients_permanent": bool(recipients) and (recipients_env or persistent_db),
             })
+            return
+        if parsed.path.startswith("/api/collect/status/"):
+            if not self._require_admin():
+                return
+            job_id = parsed.path.rsplit("/", 1)[-1]
+            job = self._get_collection_job(job_id)
+            if not job:
+                self._json({"error": "수집 작업을 찾을 수 없습니다."}, 404)
+                return
+            self._json(job)
             return
         if parsed.path in {"/", "/index.html"}:
             path = STATIC_DIR / "index.html"
@@ -337,27 +469,33 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError, json.JSONDecodeError):
             self._json({"error": "입력값을 확인하세요."}, 400)
             return
+        if not self.collection_lock.acquire(blocking=False):
+            running = self._latest_running_collection_job()
+            if running:
+                self._json({"ok": True, "already_running": True, "job_id": running["id"], "job": running})
+                return
+            self._json({"error": "이미 수집 작업이 진행 중입니다."}, 409)
+            return
         law_key = get_secret(self.settings.db_path, "law_api_oc")
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="manual-refresh") as pool:
-            bid_future = pool.submit(collect_all, service_key, lookback_hours, 45)
-            news_future = pool.submit(collect_news, law_key, 30)
-            notices, sources = bid_future.result()
-            news_items, news_sources = news_future.result()
-        counts = {"inserted": 0, "updated": 0, "unchanged": 0}
-        for notice in notices:
-            counts[upsert_notice(self.settings.db_path, notice)] += 1
-        news_counts = {"inserted": 0, "updated": 0}
-        for item in news_items:
-            news_counts[upsert_news(self.settings.db_path, item)] += 1
-        if news_items:
-            prune_news(self.settings.db_path, news_items)
-        sources.extend(news_sources)
-        any_ok = any(item["ok"] for item in sources)
-        self._json({
-            "ok": any_ok, "partial": any_ok and any(not item["ok"] for item in sources),
-            "total": len(notices),
-            "sources": sources, "news": news_counts, **counts,
-        }, 200)
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        job_id = secrets.token_urlsafe(12)
+        with self.collection_jobs_lock:
+            self.collection_jobs[job_id] = {
+                "id": job_id, "status": "running", "ok": True, "partial": False,
+                "started_at": now, "updated_at": now, "completed_at": "",
+                "message": "수집 작업을 시작했습니다. 수집되는 자료부터 바로 저장합니다.",
+                "percent": 1, "source_total": 1, "sources": [],
+                "total": 0, "inserted": 0, "updated": 0, "unchanged": 0,
+                "news_inserted": 0, "news_updated": 0,
+            }
+        worker = threading.Thread(
+            target=self._run_collection_job,
+            args=(job_id, service_key, law_key, lookback_hours),
+            name=f"collection-{job_id}",
+            daemon=True,
+        )
+        worker.start()
+        self._json({"ok": True, "job_id": job_id, "job": self._get_collection_job(job_id)}, 202)
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
