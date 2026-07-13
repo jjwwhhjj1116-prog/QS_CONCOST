@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .db import (
     authenticate_admin, change_admin_password, get_setting, list_notices, set_setting,
-    delete_digest_recipient, list_digest_deliveries, list_digest_recipients,
+    delete_digest_recipient, init_db, list_digest_deliveries, list_digest_recipients,
     list_news, prune_news, save_digest_recipient, stats, update_status, upsert_news, upsert_notice,
 )
 from .collector import collect_all, collect_news
@@ -781,6 +781,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(settings: Settings, open_browser: bool = False) -> None:
+    init_db(settings.db_path)
     migrate_secret(settings.db_path, "public_data_api_key", settings.service_key)
     interval = max(0, int(os.getenv("AUTO_COLLECT_INTERVAL_MINUTES", "0") or "0"))
     if interval:
