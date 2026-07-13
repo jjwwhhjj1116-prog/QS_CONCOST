@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
-from .scoring import score_notice
+from .scoring import MIN_NOTICE_SCORE, score_notice
 
 
 HOME_URL = "https://ebid.ex.co.kr/default.do"
@@ -79,7 +79,7 @@ def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
                     item_time = cutoff
                 if item_time >= cutoff - 86400:
                     normalized = normalize_item(item, category)
-                    if normalized["score"] > 20:
+                    if normalized["score"] >= MIN_NOTICE_SCORE:
                         result.append(normalized)
         return result
     except ExpresswayError:

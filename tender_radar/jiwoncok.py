@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import unquote, urljoin
 from urllib.request import Request, urlopen
 
-from .scoring import score_notice
+from .scoring import MIN_NOTICE_SCORE, score_notice
 
 
 SEOUL_TZ = datetime.now().astimezone().tzinfo
@@ -364,7 +364,7 @@ def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
-        if int(item.get("score") or 0) > 20:
+        if int(item.get("score") or 0) >= MIN_NOTICE_SCORE:
             deduped.append(item)
     return deduped
 

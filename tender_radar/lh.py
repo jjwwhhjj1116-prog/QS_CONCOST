@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
-from .scoring import score_notice
+from .scoring import MIN_NOTICE_SCORE, score_notice
 
 
 BASE_URL = "http://openapi.ebid.lh.or.kr/ebid.com.openapi.service.OpenBidInfoList.dev"
@@ -95,7 +95,7 @@ def collect_recent(service_key: str, lookback_hours: int = 48) -> list[dict[str,
         items = [{child.tag: (child.text or "").strip() for child in node} for node in root.findall(".//item")]
         fetched += len(items)
         normalized = (normalize_item(item) for item in items)
-        result.extend(item for item in normalized if item["score"] > 20)
+        result.extend(item for item in normalized if item["score"] >= MIN_NOTICE_SCORE)
         total = int(root.findtext(".//totalCount") or fetched)
         if not items or fetched >= total:
             break

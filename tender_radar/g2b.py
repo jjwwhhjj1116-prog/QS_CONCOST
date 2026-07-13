@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .scoring import score_notice
+from .scoring import MIN_NOTICE_SCORE, score_notice
 
 
 BASE_URL = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService"
@@ -131,7 +131,7 @@ def fetch_category(
         items, total = _extract_payload(payload)
         fetched += len(items)
         normalized = (normalize_item(item, category) for item in items)
-        collected.extend(item for item in normalized if item["score"] > 20)
+        collected.extend(item for item in normalized if item["score"] >= MIN_NOTICE_SCORE)
         if not items or fetched >= total:
             break
         page += 1

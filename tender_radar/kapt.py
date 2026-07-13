@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .scoring import score_notice
+from .scoring import MIN_NOTICE_SCORE, score_notice
 
 
 LIST_URL = "https://www.k-apt.go.kr/bid/bidList.do"
@@ -153,7 +153,7 @@ def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
                 reached_cutoff = True
                 continue
             normalized = normalize_item(item)
-            if normalized["score"] > 20:
+            if normalized["score"] >= MIN_NOTICE_SCORE:
                 result.append(normalized)
         if reached_cutoff:
             break

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .scoring import SCORING_VERSION, score_notice
+from .scoring import MIN_NOTICE_SCORE, SCORING_VERSION, score_notice
 
 
 SCHEMA = """
@@ -189,7 +189,7 @@ def init_db(db_path: Path) -> None:
                     "UPDATE notices SET score=?, matched_keywords=? WHERE id=?",
                     (score, json.dumps(matched, ensure_ascii=False), row["id"]),
                 )
-            conn.execute("DELETE FROM notices WHERE score <= 20")
+            conn.execute("DELETE FROM notices WHERE score < ?", (MIN_NOTICE_SCORE,))
             for row in conn.execute("SELECT id,title,summary,source,category FROM news"):
                 score, matched = score_notice(
                     row["title"], row["summary"], row["source"], row["category"]

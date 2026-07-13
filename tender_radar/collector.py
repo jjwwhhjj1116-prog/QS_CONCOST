@@ -4,6 +4,7 @@ from concurrent.futures import TimeoutError, ThreadPoolExecutor, as_completed
 from typing import Any
 
 from . import expressway, g2b, jiwoncok, kapt, law_news, lh, official_news
+from .scoring import MIN_NOTICE_SCORE
 
 
 def _collect_with_deadline(
@@ -61,7 +62,7 @@ def collect_all(
     for source, rows in rows_by_source.items():
         for row in rows:
             score = int(row.get("score") or 0)
-            if score > 20:
+            if score >= MIN_NOTICE_SCORE:
                 notices.append(row)
                 by_source[source]["kept"] += 1
             else:

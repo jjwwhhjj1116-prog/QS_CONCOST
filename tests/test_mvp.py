@@ -18,7 +18,7 @@ from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
 from tender_radar.jiwoncok import discover_board_urls, parse_jiwoncok_email, parse_source_page
-from tender_radar.scoring import score_notice
+from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice
 from tender_radar.server import Handler, in_collect_window, in_digest_window
 
 
@@ -56,9 +56,9 @@ class MVPTests(unittest.TestCase):
         self.assertGreaterEqual(score, 50)
         self.assertTrue(any("직접시공 감점" in item for item in matched))
 
-    def test_collection_drops_score_20_or_lower(self):
-        high = {"source": "테스트", "title": "공사비 검증", "score": 70}
-        low = {"source": "테스트", "title": "도장 시공", "score": 20}
+    def test_collection_keeps_only_score_40_or_higher(self):
+        high = {"source": "테스트", "title": "공사비 검증", "score": MIN_NOTICE_SCORE}
+        low = {"source": "테스트", "title": "도장 시공", "score": MIN_NOTICE_SCORE - 1}
         with patch("tender_radar.collector.g2b.collect_recent", return_value=[high, low]), patch(
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
@@ -139,39 +139,38 @@ class MVPTests(unittest.TestCase):
                     Handler.collection_lock.release()
 
     def test_stale_collection_job_can_be_expired_and_unlocks(self):
-        with patch.dict("os.environ", {"COLLECTION_JOB_TIMEOUT_SECONDS": "0.05"}):
-            job_id = "stale-test"
-            old = (datetime.now().astimezone() - timedelta(seconds=20)).isoformat(timespec="seconds")
-            self.assertTrue(Handler.collection_lock.acquire(blocking=False))
-            Handler.collection_lock_owner = job_id
-            try:
-                with Handler.collection_jobs_lock:
-                    Handler.collection_jobs = {
-                        job_id: {
-                            "id": job_id, "status": "running", "ok": True, "partial": False,
-                            "started_at": old, "updated_at": old, "completed_at": "",
-                            "percent": 43, "message": "테스트", "sources": [
-                                {"source": "나라장터", "ok": True, "total": 1}
-                            ], "source_total": 7,
-                        }
+        job_id = "stale-test"
+        old = (datetime.now().astimezone() - timedelta(seconds=310)).isoformat(timespec="seconds")
+        self.assertTrue(Handler.collection_lock.acquire(blocking=False))
+        Handler.collection_lock_owner = job_id
+        try:
+            with Handler.collection_jobs_lock:
+                Handler.collection_jobs = {
+                    job_id: {
+                        "id": job_id, "status": "running", "ok": True, "partial": False,
+                        "started_at": old, "updated_at": old, "completed_at": "",
+                        "percent": 43, "message": "테스트", "sources": [
+                            {"source": "나라장터", "ok": True, "total": 1}
+                        ], "source_total": 7,
                     }
-                job = Handler._get_collection_job(job_id)
-                self.assertTrue(Handler._collection_job_is_stale(job))
-                expired = Handler._expire_collection_job(job_id)
-                self.assertEqual(expired["status"], "complete")
-                self.assertEqual(expired["percent"], 100)
-                self.assertTrue(expired["partial"])
-                self.assertTrue(any("제한시간" in source.get("error", "") for source in expired["sources"]))
-                self.assertTrue(Handler.collection_lock.acquire(blocking=False))
+                }
+            job = Handler._get_collection_job(job_id)
+            self.assertTrue(Handler._collection_job_is_stale(job))
+            expired = Handler._expire_collection_job(job_id)
+            self.assertEqual(expired["status"], "complete")
+            self.assertEqual(expired["percent"], 100)
+            self.assertTrue(expired["partial"])
+            self.assertTrue(any("제한시간" in source.get("error", "") for source in expired["sources"]))
+            self.assertTrue(Handler.collection_lock.acquire(blocking=False))
+            Handler.collection_lock.release()
+        finally:
+            with Handler.collection_jobs_lock:
+                Handler.collection_jobs = {}
+            Handler.collection_lock_owner = None
+            if Handler.collection_lock.acquire(blocking=False):
                 Handler.collection_lock.release()
-            finally:
-                with Handler.collection_jobs_lock:
-                    Handler.collection_jobs = {}
-                Handler.collection_lock_owner = None
-                if Handler.collection_lock.acquire(blocking=False):
-                    Handler.collection_lock.release()
-                else:
-                    Handler.collection_lock.release()
+            else:
+                Handler.collection_lock.release()
 
     def test_recipient_environment_seed_survives_empty_database(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
@@ -228,7 +227,7 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(rows[0]["source_key"], "11167")
         self.assertEqual(rows[0]["category"], "평가위원 모집")
         self.assertEqual(rows[0]["deadline_at"], "2026-07-15")
-        self.assertGreater(rows[0]["score"], 20)
+        self.assertGreaterEqual(rows[0]["score"], MIN_NOTICE_SCORE)
 
     def test_parse_jiwoncok_source_page(self):
         page = """
