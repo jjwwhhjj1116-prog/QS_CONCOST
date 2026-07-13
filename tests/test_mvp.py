@@ -16,7 +16,7 @@ from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
-from tender_radar.jiwoncok import parse_jiwoncok_email, parse_source_page
+from tender_radar.jiwoncok import discover_board_urls, parse_jiwoncok_email, parse_source_page
 from tender_radar.scoring import score_notice
 from tender_radar.server import in_collect_window, in_digest_window
 
@@ -155,6 +155,18 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(rows[0]["institution"], "평택시")
         self.assertEqual(rows[0]["deadline_at"], "2026-07-15")
         self.assertTrue(rows[0]["url"].startswith("https://www.example.go.kr/notice/"))
+
+    def test_discover_jiwoncok_board_urls(self):
+        page = """
+        <a href="/intro">기관소개</a>
+        <a href="/saeol/gosi/list.do">고시공고</a>
+        <a href="https://outside.example.com/notice">외부공지</a>
+        <a href="/board/notice/list.do">공지사항</a>
+        """
+        urls = discover_board_urls(page, "https://www.example.go.kr/")
+        self.assertIn("https://www.example.go.kr/saeol/gosi/list.do", urls)
+        self.assertIn("https://www.example.go.kr/board/notice/list.do", urls)
+        self.assertTrue(all("outside.example.com" not in url for url in urls))
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({
