@@ -166,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
             if not job or job.get("status") != "running":
                 return json.loads(json.dumps(job, ensure_ascii=False)) if job else None
             known_sources = {source.get("source") for source in job.get("sources", [])}
-            for source in ("나라장터", "LH", "도로공사", "공동주택관리정보시스템", "지원COK", "공식 건설뉴스", "국가법령정보"):
+            for source in ("나라장터", "LH", "도로공사", "공동주택관리정보시스템", "공식 건설뉴스", "국가법령정보"):
                 if source not in known_sources:
                     job["sources"].append({"source": source, "ok": False, "total": 0, "error": reason})
             job.update({
@@ -207,7 +207,6 @@ class Handler(BaseHTTPRequestHandler):
             ("LH", lambda: lh.collect_recent(service_key, lookback_hours)),
             ("도로공사", lambda: expressway.collect_recent(lookback_hours)),
             ("공동주택관리정보시스템", lambda: kapt.collect_recent(lookback_hours)),
-            ("지원COK", lambda: jiwoncok.collect_recent(lookback_hours)),
         )
         news_jobs: list[tuple[str, object]] = [("공식 건설뉴스", official_news.collect_official_news)]
         if law_key:
@@ -570,7 +569,17 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, json.JSONDecodeError):
                 lookback_hours = 48
             try:
-                rows = [row for row in jiwoncok.collect_recent(lookback_hours) if int(row.get("score") or 0) >= MIN_NOTICE_SCORE]
+                pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jiwoncok-manual")
+                future = pool.submit(jiwoncok.collect_recent, lookback_hours)
+                try:
+                    collected = list(future.result(timeout=45) or [])
+                except TimeoutError:
+                    future.cancel()
+                    self._json({"error": "지원COK 원기관 수집이 45초를 초과해 중단되었습니다. 다음에 다시 시도하세요."}, 504)
+                    return
+                finally:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                rows = [row for row in collected if int(row.get("score") or 0) >= MIN_NOTICE_SCORE]
                 counts = {"inserted": 0, "updated": 0, "unchanged": 0}
                 for notice in rows:
                     counts[upsert_notice(self.settings.db_path, notice)] += 1

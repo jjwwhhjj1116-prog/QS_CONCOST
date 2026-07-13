@@ -63,7 +63,6 @@ class MVPTests(unittest.TestCase):
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
-        ), patch("tender_radar.collector.jiwoncok.collect_recent", return_value=[]
         ):
             notices, statuses = collect_all("key", 48)
         self.assertEqual(notices, [high])
@@ -78,7 +77,6 @@ class MVPTests(unittest.TestCase):
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
-        ), patch("tender_radar.collector.jiwoncok.collect_recent", return_value=[]
         ):
             notices, statuses = collect_all("key", 48, source_timeout_seconds=0.05)
         self.assertEqual(notices, [])
