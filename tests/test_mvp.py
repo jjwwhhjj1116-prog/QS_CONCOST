@@ -11,6 +11,7 @@ from tender_radar.db import (
 )
 from tender_radar.email_digest import SEOUL, build_email_digest, build_resend_request, send_test_email
 from tender_radar.collector import collect_all
+from tender_radar.config import Settings
 from tender_radar.g2b import normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
@@ -18,7 +19,7 @@ from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list 
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
 from tender_radar.jiwoncok import discover_board_urls, parse_jiwoncok_email, parse_source_page
 from tender_radar.scoring import score_notice
-from tender_radar.server import in_collect_window, in_digest_window
+from tender_radar.server import Handler, in_collect_window, in_digest_window
 
 
 class MVPTests(unittest.TestCase):
@@ -84,6 +85,56 @@ class MVPTests(unittest.TestCase):
         self.assertFalse(statuses[0]["ok"])
         self.assertIn("제한시간", statuses[0]["error"])
         self.assertTrue(all(status["ok"] for status in statuses[1:]))
+
+    def test_server_collection_job_finishes_with_partial_timeout(self):
+        def slow_source(*_):
+            time.sleep(0.2)
+            return [{"source": "나라장터", "title": "공사비 검증", "score": 70}]
+
+        def fast_notice(*_):
+            return [{"source": "테스트", "source_key": "fast", "title": "공사비 검증", "score": 70}]
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"COLLECTION_JOB_TIMEOUT_SECONDS": "0.05"}
+        ), patch("tender_radar.server.g2b.collect_recent", side_effect=slow_source), patch(
+            "tender_radar.server.lh.collect_recent", return_value=[]
+        ), patch("tender_radar.server.expressway.collect_recent", return_value=[]), patch(
+            "tender_radar.server.kapt.collect_recent", side_effect=fast_notice
+        ), patch("tender_radar.server.jiwoncok.collect_recent", return_value=[]), patch(
+            "tender_radar.server.official_news.collect_official_news", return_value=[]
+        ):
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            job_id = "timeout-test"
+            now = datetime.now().astimezone().isoformat(timespec="seconds")
+            self.assertTrue(Handler.collection_lock.acquire(blocking=False))
+            try:
+                with Handler.collection_jobs_lock:
+                    Handler.collection_jobs = {
+                        job_id: {
+                            "id": job_id, "status": "running", "ok": True, "partial": False,
+                            "started_at": now, "updated_at": now, "completed_at": "",
+                            "percent": 0, "message": "테스트", "sources": [], "source_total": 0,
+                            "total": 0, "inserted": 0, "updated": 0, "unchanged": 0,
+                            "news_inserted": 0, "news_updated": 0,
+                        }
+                    }
+                handler._run_collection_job(job_id, "key", "", 48)
+                job = Handler._get_collection_job(job_id)
+                self.assertEqual(job["status"], "complete")
+                self.assertEqual(job["percent"], 100)
+                self.assertTrue(job["partial"])
+                self.assertTrue(any(source.get("ok") for source in job["sources"]))
+                self.assertTrue(any("제한시간" in source.get("error", "") for source in job["sources"]))
+            finally:
+                with Handler.collection_jobs_lock:
+                    Handler.collection_jobs = {}
+                if Handler.collection_lock.acquire(blocking=False):
+                    Handler.collection_lock.release()
+                else:
+                    Handler.collection_lock.release()
 
     def test_recipient_environment_seed_survives_empty_database(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(

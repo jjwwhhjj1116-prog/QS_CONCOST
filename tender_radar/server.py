@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError, ThreadPoolExecutor, as_completed
 from datetime import datetime
 from http.cookies import SimpleCookie
 from http import HTTPStatus
@@ -30,6 +30,16 @@ from .secrets_store import get_secret, migrate_secret, set_secret
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def collection_job_timeout_seconds() -> float:
+    try:
+        value = float(os.getenv("COLLECTION_JOB_TIMEOUT_SECONDS", "270"))
+    except ValueError:
+        return 270.0
+    if value <= 0:
+        return 270.0
+    return min(value, 300.0)
 
 
 def is_kst_weekday(now: datetime) -> bool:
@@ -169,9 +179,14 @@ class Handler(BaseHTTPRequestHandler):
             "news_inserted": 0, "news_updated": 0,
         }
         try:
-            with ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="collection-job") as pool:
-                futures = {pool.submit(collect): (kind, source) for kind, source, collect in jobs}
-                for future in as_completed(futures):
+            timeout_seconds = collection_job_timeout_seconds()
+
+            pool = ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="collection-job")
+            futures = {pool.submit(collect): (kind, source) for kind, source, collect in jobs}
+            pending = set(futures)
+            try:
+                for future in as_completed(futures, timeout=timeout_seconds):
+                    pending.discard(future)
                     kind, source = futures[future]
                     try:
                         rows = list(future.result() or [])
@@ -198,6 +213,23 @@ class Handler(BaseHTTPRequestHandler):
                             "source": source, "ok": False, "total": 0, "error": str(exc),
                         })
                     self._update_collection_job(job_id, **totals, message="수집된 자료부터 화면에 반영하고 있습니다.")
+            except TimeoutError:
+                self._update_collection_job(
+                    job_id,
+                    partial=True,
+                    message="제한시간 안에 수집된 자료를 먼저 반영하고, 느린 소스는 다음 예약 수집에서 재시도합니다.",
+                )
+            finally:
+                for future in pending:
+                    kind, source = futures[future]
+                    future.cancel()
+                    self._append_collection_source(job_id, {
+                        "source": source,
+                        "ok": False,
+                        "total": 0,
+                        "error": f"{int(timeout_seconds)}초 제한시간 초과",
+                    })
+                pool.shutdown(wait=False, cancel_futures=True)
         except Exception as exc:
             self._append_collection_source(job_id, {
                 "source": "수집 작업", "ok": False, "total": 0, "error": str(exc),
