@@ -1,15 +1,15 @@
 import tempfile
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 from pathlib import Path
 
 from tender_radar.db import (
     connect, delete_digest_recipient, list_digest_recipients, save_digest_recipient,
-    get_setting, init_db, list_notices, set_setting, upsert_notice,
+    get_setting, init_db, list_notices, set_setting, upsert_news, upsert_notice,
 )
-from tender_radar.email_digest import build_email_digest, build_resend_request, send_test_email
+from tender_radar.email_digest import SEOUL, build_email_digest, build_resend_request, send_test_email
 from tender_radar.collector import collect_all
 from tender_radar.g2b import normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
@@ -221,6 +221,28 @@ class MVPTests(unittest.TestCase):
             self.assertEqual(second["counts"]["new_notices"], 0)
             self.assertEqual(second["counts"]["old_notices"], 1)
             self.assertIn("기존 알림 프로젝트", second["html"])
+
+    def test_digest_includes_only_today_news(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "test.db"
+            today = datetime.now(SEOUL).date()
+            yesterday = today - timedelta(days=1)
+            upsert_news(db, {
+                "source": "테스트뉴스", "source_key": "today-news",
+                "category": "건설 주요뉴스", "title": "오늘 공사비 검증 뉴스",
+                "summary": "", "published_at": today.isoformat(), "url": "https://example.com/today",
+                "score": 80, "matched_keywords": ["공사비"],
+            })
+            upsert_news(db, {
+                "source": "테스트뉴스", "source_key": "old-news",
+                "category": "건설 주요뉴스", "title": "어제 공사비 검증 뉴스",
+                "summary": "", "published_at": yesterday.isoformat(), "url": "https://example.com/old",
+                "score": 95, "matched_keywords": ["공사비"],
+            })
+            digest = build_email_digest(db)
+            self.assertEqual(digest["counts"]["new_news"], 1)
+            self.assertIn("오늘 공사비 검증 뉴스", digest["html"])
+            self.assertNotIn("어제 공사비 검증 뉴스", digest["html"])
 
     def test_resend_request_has_required_user_agent(self):
         request = build_resend_request("test-key", b"{}")

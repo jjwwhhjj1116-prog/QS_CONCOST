@@ -35,14 +35,37 @@ def build_resend_request(api_key: str, payload: bytes) -> Request:
     )
 
 
-def _rows(db_path: Path, kind: str, already_sent: bool, limit: int) -> list[dict]:
+def _parse_date(value: object) -> datetime.date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"(20\d{2})[.\-/년\s]*(\d{1,2})[.\-/월\s]*(\d{1,2})", text)
+    if not match:
+        return None
+    try:
+        return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).date()
+    except ValueError:
+        return None
+
+
+def _is_today_news(item: dict, today: datetime.date | None = None) -> bool:
+    today = today or datetime.now(SEOUL).date()
+    published = _parse_date(item.get("published_at"))
+    if published:
+        return published == today
+    first_seen = _parse_date(item.get("first_seen_at"))
+    return first_seen == today
+
+
+def _rows(db_path: Path, kind: str, already_sent: bool, limit: int, today_only: bool = False) -> list[dict]:
     table = "notices" if kind == "notice" else "news"
     sent_clause = "EXISTS" if already_sent else "NOT EXISTS"
     recent_clause = "" if kind == "notice" else "AND n.last_seen_at >= ?"
     params: list[object] = [kind]
     if kind == "news":
         params.append((datetime.now().astimezone() - timedelta(days=14)).isoformat(timespec="seconds"))
-    params.append(limit)
+    fetch_limit = max(limit * 10, 100) if today_only else limit
+    params.append(fetch_limit)
     with connect(db_path) as conn:
         rows = conn.execute(
             f"""SELECT n.* FROM {table} n
@@ -62,7 +85,11 @@ def _rows(db_path: Path, kind: str, already_sent: bool, limit: int) -> list[dict
             item["matched_keywords"] = json.loads(item.get("matched_keywords", "[]"))
         except json.JSONDecodeError:
             item["matched_keywords"] = []
+        if today_only and kind == "news" and not _is_today_news(item):
+            continue
         result.append(item)
+        if len(result) >= limit:
+            break
     return result
 
 
@@ -136,8 +163,8 @@ def build_email_digest(db_path: Path, website_url: str = "https://qs-concost.onr
     init_db(db_path)
     new_notices = _rows(db_path, "notice", False, 30)
     old_notices = _rows(db_path, "notice", True, 12)
-    new_news = _rows(db_path, "news", False, 20)
-    old_news = _rows(db_path, "news", True, 8)
+    new_news = _rows(db_path, "news", False, 20, today_only=True)
+    old_news: list[dict] = []
     construction_new = [x for x in new_news if x.get("category") != "법규·제도 개정"]
     law_new = [x for x in new_news if x.get("category") == "법규·제도 개정"]
     construction_old = [x for x in old_news if x.get("category") != "법규·제도 개정"]
