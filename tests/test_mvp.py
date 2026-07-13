@@ -16,6 +16,7 @@ from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
+from tender_radar.jiwoncok import parse_jiwoncok_email
 from tender_radar.scoring import score_notice
 from tender_radar.server import in_collect_window, in_digest_window
 
@@ -117,6 +118,27 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["source_key"], "312238")
         self.assertEqual(rows[0]["summary"], "")
+
+    def test_parse_jiwoncok_forwarded_mail(self):
+        body = """
+        [평택시 토진어연처리분구 어연 소규모 하수처리시설 증설공사 공법선정위원회 평가위원 모집](https://track.example/L0/https:%2F%2Fjiwonkok.com%2F11167%2F%3Fsource=member-email/1)
+
+        🏢
+        공고기관: 평택시
+
+        📅
+        접수기간: 2026-07-13 ~ 2026-07-15
+
+        🏷️
+        모집분야: 상하수도, 환경, 기계, 전기
+        """
+        rows = parse_jiwoncok_email(body, published_at="2026-07-13")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "지원COK")
+        self.assertEqual(rows[0]["source_key"], "11167")
+        self.assertEqual(rows[0]["category"], "평가위원 모집")
+        self.assertEqual(rows[0]["deadline_at"], "2026-07-15")
+        self.assertGreater(rows[0]["score"], 20)
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({

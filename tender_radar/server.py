@@ -25,6 +25,7 @@ from .db import (
 from .collector import collect_all, collect_news
 from . import expressway, g2b, kapt, law_news, lh, official_news
 from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
+from .jiwoncok import parse_jiwoncok_email
 from .secrets_store import get_secret, migrate_secret, set_secret
 
 
@@ -63,8 +64,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _read_json(self) -> dict:
-        length = min(int(self.headers.get("Content-Length", "0")), 20_000)
+    def _read_json(self, max_bytes: int = 20_000) -> dict:
+        length = min(int(self.headers.get("Content-Length", "0")), max_bytes)
         value = json.loads(self.rfile.read(length) or b"{}")
         if not isinstance(value, dict):
             raise ValueError("JSON object required")
@@ -470,6 +471,29 @@ class Handler(BaseHTTPRequestHandler):
                 "sources": news_sources,
                 **news_counts,
             }, 200 if any(item["ok"] for item in news_sources) else 502)
+            return
+        if parsed.path == "/api/admin/import-jiwoncok":
+            if not self._require_admin():
+                return
+            try:
+                payload = self._read_json(250_000)
+                text = str(payload.get("text", ""))
+                parsed_rows = parse_jiwoncok_email(text)
+                notices = [row for row in parsed_rows if int(row.get("score") or 0) > 20]
+                counts = {"inserted": 0, "updated": 0, "unchanged": 0}
+                for notice in notices:
+                    counts[upsert_notice(self.settings.db_path, notice)] += 1
+                self._json({
+                    "ok": True,
+                    "parsed": len(parsed_rows),
+                    "total": len(notices),
+                    "filtered": len(parsed_rows) - len(notices),
+                    **counts,
+                })
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._json({"error": str(exc)}, 502)
             return
         if parsed.path != "/api/collect":
             self.send_error(HTTPStatus.NOT_FOUND)
