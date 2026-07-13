@@ -110,6 +110,7 @@ class MVPTests(unittest.TestCase):
             job_id = "timeout-test"
             now = datetime.now().astimezone().isoformat(timespec="seconds")
             self.assertTrue(Handler.collection_lock.acquire(blocking=False))
+            Handler.collection_lock_owner = job_id
             try:
                 with Handler.collection_jobs_lock:
                     Handler.collection_jobs = {
@@ -131,6 +132,42 @@ class MVPTests(unittest.TestCase):
             finally:
                 with Handler.collection_jobs_lock:
                     Handler.collection_jobs = {}
+                if Handler.collection_lock.acquire(blocking=False):
+                    Handler.collection_lock.release()
+                else:
+                    Handler.collection_lock_owner = None
+                    Handler.collection_lock.release()
+
+    def test_stale_collection_job_can_be_expired_and_unlocks(self):
+        with patch.dict("os.environ", {"COLLECTION_JOB_TIMEOUT_SECONDS": "0.05"}):
+            job_id = "stale-test"
+            old = (datetime.now().astimezone() - timedelta(seconds=20)).isoformat(timespec="seconds")
+            self.assertTrue(Handler.collection_lock.acquire(blocking=False))
+            Handler.collection_lock_owner = job_id
+            try:
+                with Handler.collection_jobs_lock:
+                    Handler.collection_jobs = {
+                        job_id: {
+                            "id": job_id, "status": "running", "ok": True, "partial": False,
+                            "started_at": old, "updated_at": old, "completed_at": "",
+                            "percent": 43, "message": "테스트", "sources": [
+                                {"source": "나라장터", "ok": True, "total": 1}
+                            ], "source_total": 7,
+                        }
+                    }
+                job = Handler._get_collection_job(job_id)
+                self.assertTrue(Handler._collection_job_is_stale(job))
+                expired = Handler._expire_collection_job(job_id)
+                self.assertEqual(expired["status"], "complete")
+                self.assertEqual(expired["percent"], 100)
+                self.assertTrue(expired["partial"])
+                self.assertTrue(any("제한시간" in source.get("error", "") for source in expired["sources"]))
+                self.assertTrue(Handler.collection_lock.acquire(blocking=False))
+                Handler.collection_lock.release()
+            finally:
+                with Handler.collection_jobs_lock:
+                    Handler.collection_jobs = {}
+                Handler.collection_lock_owner = None
                 if Handler.collection_lock.acquire(blocking=False):
                     Handler.collection_lock.release()
                 else:

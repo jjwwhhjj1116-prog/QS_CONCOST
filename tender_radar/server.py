@@ -34,11 +34,11 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 def collection_job_timeout_seconds() -> float:
     try:
-        value = float(os.getenv("COLLECTION_JOB_TIMEOUT_SECONDS", "270"))
+        value = float(os.getenv("COLLECTION_JOB_TIMEOUT_SECONDS", "75"))
     except ValueError:
-        return 270.0
+        return 75.0
     if value <= 0:
-        return 270.0
+        return 75.0
     return min(value, 300.0)
 
 
@@ -63,6 +63,7 @@ class Handler(BaseHTTPRequestHandler):
     login_failures: dict[str, list[float]] = {}
     digest_lock = threading.Lock()
     collection_lock = threading.Lock()
+    collection_lock_owner: str | None = None
     collection_jobs: dict[str, dict] = {}
     collection_jobs_lock = threading.Lock()
 
@@ -122,6 +123,8 @@ class Handler(BaseHTTPRequestHandler):
             job = cls.collection_jobs.get(job_id)
             if not job:
                 return
+            if job.get("status") != "running":
+                return
             job["sources"].append(source_status)
             done = len(job["sources"])
             total = max(1, int(job.get("source_total") or 1))
@@ -141,6 +144,47 @@ class Handler(BaseHTTPRequestHandler):
             if not running:
                 return None
             return json.loads(json.dumps(sorted(running, key=lambda item: item["started_at"])[-1], ensure_ascii=False))
+
+    @classmethod
+    def _collection_job_is_stale(cls, job: dict | None) -> bool:
+        if not job or job.get("status") != "running":
+            return False
+        try:
+            started = datetime.fromisoformat(str(job.get("started_at", "")))
+            if started.tzinfo is None:
+                started = started.astimezone()
+        except ValueError:
+            return False
+        max_age = collection_job_timeout_seconds() + 15
+        return (datetime.now().astimezone() - started).total_seconds() > max_age
+
+    @classmethod
+    def _expire_collection_job(cls, job_id: str, reason: str = "제한시간 초과") -> dict | None:
+        with cls.collection_jobs_lock:
+            job = cls.collection_jobs.get(job_id)
+            if not job or job.get("status") != "running":
+                return json.loads(json.dumps(job, ensure_ascii=False)) if job else None
+            known_sources = {source.get("source") for source in job.get("sources", [])}
+            for source in ("나라장터", "LH", "도로공사", "공동주택관리정보시스템", "지원COK", "공식 건설뉴스", "국가법령정보"):
+                if source not in known_sources:
+                    job["sources"].append({"source": source, "ok": False, "total": 0, "error": reason})
+            job.update({
+                "status": "complete",
+                "ok": any(source.get("ok") for source in job.get("sources", [])),
+                "partial": True,
+                "percent": 100,
+                "message": "제한시간 안에 수집된 자료만 먼저 반영했습니다. 느린 소스는 다음 예약 수집에서 재시도합니다.",
+                "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            })
+            snapshot = json.loads(json.dumps(job, ensure_ascii=False))
+        if cls.collection_lock_owner == job_id:
+            cls.collection_lock_owner = None
+            try:
+                cls.collection_lock.release()
+            except RuntimeError:
+                pass
+        return snapshot
 
     def _run_collection_job(self, job_id: str, service_key: str, law_key: str, lookback_hours: int) -> None:
         def save_notices(rows: list[dict]) -> dict[str, int]:
@@ -247,7 +291,12 @@ class Handler(BaseHTTPRequestHandler):
                 completed_at=datetime.now().astimezone().isoformat(timespec="seconds"),
                 **totals,
             )
-            self.collection_lock.release()
+            if type(self).collection_lock_owner == job_id:
+                type(self).collection_lock_owner = None
+                try:
+                    self.collection_lock.release()
+                except RuntimeError:
+                    pass
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -339,6 +388,8 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 self._json({"error": "수집 작업을 찾을 수 없습니다."}, 404)
                 return
+            if self._collection_job_is_stale(job):
+                job = self._expire_collection_job(job_id) or job
             self._json(job)
             return
         if parsed.path in {"/", "/index.html"}:
@@ -560,13 +611,24 @@ class Handler(BaseHTTPRequestHandler):
         if not self.collection_lock.acquire(blocking=False):
             running = self._latest_running_collection_job()
             if running:
-                self._json({"ok": True, "already_running": True, "job_id": running["id"], "job": running})
+                if self._collection_job_is_stale(running):
+                    self._expire_collection_job(running["id"])
+                    if self.collection_lock.acquire(blocking=False):
+                        running = None
+                    else:
+                        self._json({"error": "이전 수집 작업 정리 중입니다. 잠시 후 다시 시도하세요."}, 409)
+                        return
+                if running:
+                    self._json({"ok": True, "already_running": True, "job_id": running["id"], "job": running})
+                    return
+            else:
+                self._json({"error": "이미 수집 작업이 진행 중입니다."}, 409)
                 return
-            self._json({"error": "이미 수집 작업이 진행 중입니다."}, 409)
-            return
+        # lock acquired for the new job from here.
         law_key = get_secret(self.settings.db_path, "law_api_oc")
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         job_id = secrets.token_urlsafe(12)
+        type(self).collection_lock_owner = job_id
         with self.collection_jobs_lock:
             self.collection_jobs[job_id] = {
                 "id": job_id, "status": "running", "ok": True, "partial": False,
@@ -584,6 +646,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         worker.start()
         self._json({"ok": True, "job_id": job_id, "job": self._get_collection_job(job_id)}, 202)
+        return
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
