@@ -16,7 +16,7 @@ from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
-from tender_radar.jiwoncok import parse_jiwoncok_email
+from tender_radar.jiwoncok import parse_jiwoncok_email, parse_source_page
 from tender_radar.scoring import score_notice
 from tender_radar.server import in_collect_window, in_digest_window
 
@@ -62,6 +62,7 @@ class MVPTests(unittest.TestCase):
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
+        ), patch("tender_radar.collector.jiwoncok.collect_recent", return_value=[]
         ):
             notices, statuses = collect_all("key", 48)
         self.assertEqual(notices, [high])
@@ -76,6 +77,7 @@ class MVPTests(unittest.TestCase):
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
+        ), patch("tender_radar.collector.jiwoncok.collect_recent", return_value=[]
         ):
             notices, statuses = collect_all("key", 48, source_timeout_seconds=0.05)
         self.assertEqual(notices, [])
@@ -139,6 +141,20 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(rows[0]["category"], "평가위원 모집")
         self.assertEqual(rows[0]["deadline_at"], "2026-07-15")
         self.assertGreater(rows[0]["score"], 20)
+
+    def test_parse_jiwoncok_source_page(self):
+        page = """
+        <table><tr><td>2026-07-13</td><td>
+        <a href="/notice/view.do?seq=777">토진어연처리분구 소규모 하수처리시설 증설공사 공법선정위원회 평가위원 모집</a>
+        </td><td>접수기간 2026-07-13 ~ 2026-07-15</td></tr>
+        <tr><td><a href="/notice/view.do?seq=778">일반 행사 안내</a></td></tr></table>
+        """
+        rows = parse_source_page(page, "https://www.example.go.kr/notice/list.do", "평택시")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "지원COK")
+        self.assertEqual(rows[0]["institution"], "평택시")
+        self.assertEqual(rows[0]["deadline_at"], "2026-07-15")
+        self.assertTrue(rows[0]["url"].startswith("https://www.example.go.kr/notice/"))
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({

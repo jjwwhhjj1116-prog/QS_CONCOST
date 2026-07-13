@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import TimeoutError, ThreadPoolExecutor, as_completed
 from typing import Any
 
-from . import expressway, g2b, kapt, law_news, lh, official_news
+from . import expressway, g2b, jiwoncok, kapt, law_news, lh, official_news
 
 
 def _collect_with_deadline(
@@ -54,6 +54,7 @@ def collect_all(
         ("LH", lambda: lh.collect_recent(service_key, lookback_hours)),
         ("도로공사", lambda: expressway.collect_recent(lookback_hours)),
         ("공동주택관리정보시스템", lambda: kapt.collect_recent(lookback_hours)),
+        ("지원COK", lambda: jiwoncok.collect_recent(lookback_hours)),
     )
     rows_by_source, statuses = _collect_with_deadline(collectors, source_timeout_seconds, "bid-source")
     by_source = {source: {"kept": 0, "filtered": 0} for source, _ in collectors}
