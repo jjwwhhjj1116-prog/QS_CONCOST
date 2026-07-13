@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 import webbrowser
-from concurrent.futures import TimeoutError, ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError, ThreadPoolExecutor
 from datetime import datetime
 from http.cookies import SimpleCookie
 from http import HTTPStatus
@@ -223,58 +223,62 @@ class Handler(BaseHTTPRequestHandler):
             "total": 0, "inserted": 0, "updated": 0, "unchanged": 0,
             "news_inserted": 0, "news_updated": 0,
         }
-        try:
-            timeout_seconds = collection_job_timeout_seconds()
 
-            pool = ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="collection-job")
-            futures = {pool.submit(collect): (kind, source) for kind, source, collect in jobs}
-            pending = set(futures)
+        def collect_with_timeout(source: str, collect: object, timeout_seconds: float) -> tuple[list[dict], str]:
+            pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"source-{source}")
+            future = pool.submit(collect)
             try:
-                for future in as_completed(futures, timeout=timeout_seconds):
-                    pending.discard(future)
-                    kind, source = futures[future]
-                    try:
-                        rows = list(future.result() or [])
-                        if kind == "notice":
-                            relevant = [row for row in rows if int(row.get("score") or 0) >= MIN_NOTICE_SCORE]
-                            counts = save_notices(relevant)
-                            totals["total"] += len(relevant)
-                            totals["inserted"] += counts["inserted"]
-                            totals["updated"] += counts["updated"]
-                            totals["unchanged"] += counts["unchanged"]
-                            self._append_collection_source(job_id, {
-                                "source": source, "ok": True, "total": len(relevant),
-                                "filtered": len(rows) - len(relevant),
-                            })
-                        else:
-                            counts = save_news(rows)
-                            totals["news_inserted"] += counts["inserted"]
-                            totals["news_updated"] += counts["updated"]
-                            self._append_collection_source(job_id, {
-                                "source": source, "ok": True, "total": len(rows),
-                            })
-                    except Exception as exc:
-                        self._append_collection_source(job_id, {
-                            "source": source, "ok": False, "total": 0, "error": str(exc),
-                        })
-                    self._update_collection_job(job_id, **totals, message="수집된 자료부터 화면에 반영하고 있습니다.")
+                return list(future.result(timeout=timeout_seconds) or []), ""
             except TimeoutError:
+                future.cancel()
+                return [], f"{int(timeout_seconds)}초 제한시간 초과"
+            except Exception as exc:
+                return [], str(exc)
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+
+        try:
+            deadline = time.monotonic() + collection_job_timeout_seconds()
+            for index, (kind, source, collect) in enumerate(jobs):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.2:
+                    self._append_collection_source(job_id, {
+                        "source": source, "ok": False, "total": 0,
+                        "error": "전체 5분 제한시간 초과",
+                    })
+                    continue
+                per_source_timeout = min(35.0 if kind == "notice" else 25.0, remaining)
                 self._update_collection_job(
                     job_id,
-                    partial=True,
-                    message="제한시간 안에 수집된 자료를 먼저 반영하고, 느린 소스는 다음 예약 수집에서 재시도합니다.",
+                    **totals,
+                    message=f"{source} 수집 중입니다. {int(per_source_timeout)}초 안에 응답이 없으면 패스합니다.",
                 )
-            finally:
-                for future in pending:
-                    kind, source = futures[future]
-                    future.cancel()
+                rows, error = collect_with_timeout(source, collect, per_source_timeout)
+                if error:
                     self._append_collection_source(job_id, {
-                        "source": source,
-                        "ok": False,
-                        "total": 0,
-                        "error": f"{int(timeout_seconds)}초 제한시간 초과",
+                        "source": source, "ok": False, "total": 0, "error": error,
                     })
-                pool.shutdown(wait=False, cancel_futures=True)
+                    self._update_collection_job(job_id, **totals, message=f"{source} 지연으로 패스하고 다음 소스로 넘어갑니다.")
+                    continue
+                if kind == "notice":
+                    relevant = [row for row in rows if int(row.get("score") or 0) >= MIN_NOTICE_SCORE]
+                    counts = save_notices(relevant)
+                    totals["total"] += len(relevant)
+                    totals["inserted"] += counts["inserted"]
+                    totals["updated"] += counts["updated"]
+                    totals["unchanged"] += counts["unchanged"]
+                    self._append_collection_source(job_id, {
+                        "source": source, "ok": True, "total": len(relevant),
+                        "filtered": len(rows) - len(relevant),
+                    })
+                else:
+                    counts = save_news(rows)
+                    totals["news_inserted"] += counts["inserted"]
+                    totals["news_updated"] += counts["updated"]
+                    self._append_collection_source(job_id, {
+                        "source": source, "ok": True, "total": len(rows),
+                    })
+                self._update_collection_job(job_id, **totals, message="수집된 자료부터 화면에 반영하고 있습니다.")
         except Exception as exc:
             self._append_collection_source(job_id, {
                 "source": "수집 작업", "ok": False, "total": 0, "error": str(exc),

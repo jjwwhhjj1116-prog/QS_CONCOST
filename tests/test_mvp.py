@@ -88,18 +88,25 @@ class MVPTests(unittest.TestCase):
 
     def test_server_collection_job_finishes_with_partial_timeout(self):
         def slow_source(*_):
-            time.sleep(0.2)
-            return [{"source": "나라장터", "title": "공사비 검증", "score": 70}]
+            time.sleep(0.5)
+            return [{"source": "LH", "title": "공사비 검증", "score": 70}]
 
         def fast_notice(*_):
-            return [{"source": "테스트", "source_key": "fast", "title": "공사비 검증", "score": 70}]
+            return [{
+                "source": "테스트", "source_key": "fast", "category": "용역",
+                "title": "공사비 검증", "institution": "테스트기관",
+                "published_at": "2026-07-13", "deadline_at": "2026-07-15",
+                "estimated_price": None, "region": "", "notice_type": "신규",
+                "change_reason": "", "changed_at": "", "url": "https://example.com",
+                "score": 70, "matched_keywords": ["공사비"], "raw": {},
+            }]
 
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
-            "os.environ", {"COLLECTION_JOB_TIMEOUT_SECONDS": "0.05"}
-        ), patch("tender_radar.server.g2b.collect_recent", side_effect=slow_source), patch(
-            "tender_radar.server.lh.collect_recent", return_value=[]
+            "os.environ", {"COLLECTION_JOB_TIMEOUT_SECONDS": "0.25"}
+        ), patch("tender_radar.server.g2b.collect_recent", side_effect=fast_notice), patch(
+            "tender_radar.server.lh.collect_recent", side_effect=slow_source
         ), patch("tender_radar.server.expressway.collect_recent", return_value=[]), patch(
-            "tender_radar.server.kapt.collect_recent", side_effect=fast_notice
+            "tender_radar.server.kapt.collect_recent", return_value=[]
         ), patch("tender_radar.server.jiwoncok.collect_recent", return_value=[]), patch(
             "tender_radar.server.official_news.collect_official_news", return_value=[]
         ):
