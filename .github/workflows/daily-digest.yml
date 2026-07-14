@@ -9,9 +9,14 @@ on:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Wake service for the internal 10:00 KST weekday mail scheduler
+      - name: Trigger 10:00 KST weekday email digest
+        env:
+          DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
         run: |
-          curl --fail --retry 5 --retry-all-errors --max-time 240 \
-            https://qs-concost.onrender.com/api/stats
+          test -n "$DIGEST_TRIGGER_TOKEN"
+          curl --fail --retry 5 --retry-all-errors --retry-delay 20 --max-time 540 \
+            -X POST \
+            -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN" \
+            https://qs-concost.onrender.com/api/automation/digest
