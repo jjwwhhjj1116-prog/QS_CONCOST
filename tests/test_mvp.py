@@ -17,7 +17,7 @@ from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
-from tender_radar.jiwoncok import discover_board_urls, parse_jiwoncok_email, parse_source_page
+from tender_radar.jiwoncok import active_source_pages, discover_board_urls, parse_jiwoncok_email, parse_source_page
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice
 from tender_radar.server import Handler, in_collect_window, in_digest_window
 
@@ -259,6 +259,17 @@ class MVPTests(unittest.TestCase):
         self.assertIn("https://www.example.go.kr/saeol/gosi/list.do", urls)
         self.assertIn("https://www.example.go.kr/board/notice/list.do", urls)
         self.assertTrue(all("outside.example.com" not in url for url in urls))
+
+    def test_jiwoncok_defaults_to_small_core_source_set(self):
+        with patch.dict("os.environ", {}, clear=True):
+            rows = active_source_pages()
+        self.assertLessEqual(len(rows), 12)
+        self.assertIn("경기신용보증재단", {row["institution"] for row in rows})
+
+    def test_jiwoncok_extended_mode_can_restore_full_source_set(self):
+        with patch.dict("os.environ", {"JIWONCOK_SOURCE_MODE": "extended"}, clear=True):
+            rows = active_source_pages()
+        self.assertGreater(len(rows), 40)
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({

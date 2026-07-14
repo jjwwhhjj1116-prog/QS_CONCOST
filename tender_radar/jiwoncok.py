@@ -115,6 +115,21 @@ SOURCE_PAGES = (
     {"institution": "화성시복지재단", "url": "https://www.hswf.or.kr/"},
 )
 
+CORE_INSTITUTIONS = {
+    "부산광역시",
+    "서울교통공사",
+    "창원시",
+    "김해시",
+    "구미시",
+    "평택시",
+    "청주시",
+    "인천광역시",
+    "경기신용보증재단",
+    "경기도",
+    "경기주택도시공사",
+    "제주특별자치도교육청",
+}
+
 
 class JiwonCokError(RuntimeError):
     pass
@@ -181,12 +196,19 @@ def _deadline(period: str) -> str:
     return f"{year}-{int(month):02d}-{int(day):02d}"
 
 
+def _fetch_timeout_seconds() -> float:
+    try:
+        return max(2.0, min(float(os.getenv("JIWONCOK_FETCH_TIMEOUT_SECONDS", "4")), 10.0))
+    except ValueError:
+        return 4.0
+
+
 def _fetch(url: str) -> str:
     request = Request(url, headers={
         "User-Agent": "Mozilla/5.0 (compatible; CONCOST-JiwonCOK-Radar/1.0)",
         "Accept": "text/html,application/xhtml+xml",
     })
-    with urlopen(request, timeout=10) as response:
+    with urlopen(request, timeout=_fetch_timeout_seconds()) as response:
         raw = response.read()
         charset = response.headers.get_content_charset() or "utf-8"
     return raw.decode(charset, errors="replace")
@@ -315,9 +337,35 @@ def source_pages_from_env() -> list[dict[str, str]]:
     return result
 
 
+def active_source_pages() -> list[dict[str, str]]:
+    """Return the intentionally small default source set.
+
+    지원COK 원기관은 사이트 응답 품질이 제각각이라 전체 목록을 기본 수집하면
+    느린 기관 몇 곳 때문에 체감상 멈춘 것처럼 보인다. 기본값은 핵심 기관만
+    빠르게 확인하고, 운영자가 필요할 때만 JIWONCOK_SOURCE_MODE=extended 또는
+    JIWONCOK_SOURCE_PAGES로 확장한다.
+    """
+    mode = os.getenv("JIWONCOK_SOURCE_MODE", "core").strip().lower()
+    if mode in {"all", "extended", "full"}:
+        base = list(SOURCE_PAGES)
+    else:
+        base = [source for source in SOURCE_PAGES if source["institution"] in CORE_INSTITUTIONS]
+    try:
+        limit = int(os.getenv("JIWONCOK_SOURCE_LIMIT", str(len(base))))
+    except ValueError:
+        limit = len(base)
+    if limit > 0:
+        base = base[:limit]
+    return [*base, *source_pages_from_env()]
+
+
 def collect_source_page(source: dict[str, str]) -> list[dict[str, Any]]:
     root = _fetch(source["url"])
-    urls = [source["url"], *discover_board_urls(root, source["url"])]
+    try:
+        board_limit = max(0, min(int(os.getenv("JIWONCOK_BOARD_LIMIT", "1")), 3))
+    except ValueError:
+        board_limit = 1
+    urls = [source["url"], *discover_board_urls(root, source["url"], limit=board_limit)]
     result: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     for url in urls:
@@ -335,12 +383,18 @@ def collect_source_page(source: dict[str, str]) -> list[dict[str, Any]]:
 def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
     del lookback_hours  # 기관 게시판은 표준 날짜 필터가 없어 최신 목록에서 키워드로 선별한다.
     result: list[dict[str, Any]] = []
-    sources = [*SOURCE_PAGES, *source_pages_from_env()]
-    max_workers = max(1, min(8, len(sources)))
+    sources = active_source_pages()
+    if not sources:
+        return []
     try:
-        timeout_seconds = max(5.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "35")), 240.0))
+        configured_workers = int(os.getenv("JIWONCOK_MAX_WORKERS", "4"))
     except ValueError:
-        timeout_seconds = 35.0
+        configured_workers = 4
+    max_workers = max(1, min(configured_workers, len(sources), 6))
+    try:
+        timeout_seconds = max(5.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "20")), 60.0))
+    except ValueError:
+        timeout_seconds = 20.0
     pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jiwoncok-source")
     futures = [pool.submit(collect_source_page, source) for source in sources]
     try:
