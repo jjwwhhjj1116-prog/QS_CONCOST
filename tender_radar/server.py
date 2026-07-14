@@ -503,7 +503,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "이미 발송 작업이 진행 중입니다."}, 409)
                 return
             try:
-                self._json(send_email_digest(self.settings.db_path))
+                recipients = [
+                    email.strip().lower()
+                    for email in self.headers.get("X-Digest-Recipients", "").split(",")
+                    if valid_email(email.strip().lower())
+                ]
+                self._json(send_email_digest(
+                    self.settings.db_path,
+                    api_key_override=self.headers.get("X-Resend-Api-Key", "").strip(),
+                    from_email_override=self.headers.get("X-Digest-From-Email", "").strip(),
+                    recipients_override=recipients or None,
+                ))
             except Exception as exc:
                 self._json({"error": str(exc)}, 502)
             finally:

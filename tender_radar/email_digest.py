@@ -207,15 +207,21 @@ def build_email_digest(db_path: Path, website_url: str = "https://qs-concost.onr
     }
 
 
-def send_email_digest(db_path: Path, website_url: str = "https://qs-concost.onrender.com/") -> dict:
+def send_email_digest(
+    db_path: Path,
+    website_url: str = "https://qs-concost.onrender.com/",
+    api_key_override: str = "",
+    from_email_override: str = "",
+    recipients_override: list[str] | None = None,
+) -> dict:
     digest = build_email_digest(db_path, website_url)
-    recipients = [x["email"] for x in list_digest_recipients(db_path) if x["is_active"]]
+    recipients = recipients_override or [x["email"] for x in list_digest_recipients(db_path) if x["is_active"]]
     if not recipients:
         raise ValueError("활성화된 이메일 수신자가 없습니다.")
-    api_key = get_secret(db_path, "resend_api_key", os.getenv("RESEND_API_KEY", ""))
+    api_key = api_key_override or get_secret(db_path, "resend_api_key", os.getenv("RESEND_API_KEY", ""))
     if not api_key:
         raise ValueError("Resend API 키가 설정되지 않았습니다.")
-    from_email = get_setting(db_path, "digest_from_email", os.getenv("DIGEST_FROM_EMAIL", ""))
+    from_email = from_email_override or get_setting(db_path, "digest_from_email", os.getenv("DIGEST_FROM_EMAIL", ""))
     if not from_email:
         raise ValueError("발신 이메일이 설정되지 않았습니다.")
     started = datetime.now(SEOUL).isoformat(timespec="seconds")
