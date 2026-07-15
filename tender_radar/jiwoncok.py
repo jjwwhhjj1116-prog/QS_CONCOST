@@ -118,16 +118,9 @@ SOURCE_PAGES = (
 CORE_INSTITUTIONS = {
     "부산광역시",
     "서울교통공사",
-    "창원시",
-    "김해시",
-    "구미시",
-    "평택시",
-    "청주시",
-    "인천광역시",
     "경기신용보증재단",
     "경기도",
     "경기주택도시공사",
-    "제주특별자치도교육청",
 }
 
 
@@ -198,9 +191,9 @@ def _deadline(period: str) -> str:
 
 def _fetch_timeout_seconds() -> float:
     try:
-        return max(2.0, min(float(os.getenv("JIWONCOK_FETCH_TIMEOUT_SECONDS", "4")), 10.0))
+        return max(1.5, min(float(os.getenv("JIWONCOK_FETCH_TIMEOUT_SECONDS", "3")), 6.0))
     except ValueError:
-        return 4.0
+        return 3.0
 
 
 def _fetch(url: str) -> str:
@@ -387,14 +380,14 @@ def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
     if not sources:
         return []
     try:
-        configured_workers = int(os.getenv("JIWONCOK_MAX_WORKERS", "4"))
+        configured_workers = int(os.getenv("JIWONCOK_MAX_WORKERS", "3"))
     except ValueError:
-        configured_workers = 4
-    max_workers = max(1, min(configured_workers, len(sources), 6))
+        configured_workers = 3
+    max_workers = max(1, min(configured_workers, len(sources), 4))
     try:
-        timeout_seconds = max(5.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "20")), 60.0))
+        timeout_seconds = max(5.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "12")), 30.0))
     except ValueError:
-        timeout_seconds = 20.0
+        timeout_seconds = 12.0
     pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jiwoncok-source")
     futures = [pool.submit(collect_source_page, source) for source in sources]
     try:

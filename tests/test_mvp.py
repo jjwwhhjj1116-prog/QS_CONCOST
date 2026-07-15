@@ -263,7 +263,7 @@ class MVPTests(unittest.TestCase):
     def test_jiwoncok_defaults_to_small_core_source_set(self):
         with patch.dict("os.environ", {}, clear=True):
             rows = active_source_pages()
-        self.assertLessEqual(len(rows), 12)
+        self.assertLessEqual(len(rows), 5)
         self.assertIn("경기신용보증재단", {row["institution"] for row in rows})
 
     def test_jiwoncok_extended_mode_can_restore_full_source_set(self):

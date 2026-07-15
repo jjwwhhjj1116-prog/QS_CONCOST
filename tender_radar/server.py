@@ -582,10 +582,10 @@ class Handler(BaseHTTPRequestHandler):
                 pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jiwoncok-manual")
                 future = pool.submit(jiwoncok.collect_recent, lookback_hours)
                 try:
-                    collected = list(future.result(timeout=45) or [])
+                    collected = list(future.result(timeout=15) or [])
                 except TimeoutError:
                     future.cancel()
-                    self._json({"error": "지원COK 원기관 수집이 45초를 초과해 중단되었습니다. 다음에 다시 시도하세요."}, 504)
+                    self._json({"error": "지원COK 원기관 수집이 15초를 초과해 중단되었습니다. 다음에 다시 시도하세요."}, 504)
                     return
                 finally:
                     pool.shutdown(wait=False, cancel_futures=True)
