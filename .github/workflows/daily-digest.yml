@@ -16,18 +16,15 @@ jobs:
     steps:
       - name: Trigger 10:00 KST weekday email digest
         env:
-          DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           DIGEST_FROM_EMAIL: ${{ secrets.DIGEST_FROM_EMAIL }}
           DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
         run: |
-          test -n "$DIGEST_TRIGGER_TOKEN"
           test -n "$RESEND_API_KEY"
           test -n "$DIGEST_FROM_EMAIL"
           test -n "$DIGEST_RECIPIENTS"
           curl --fail --retry 5 --retry-all-errors --retry-delay 20 --max-time 540 \
             -X POST \
-            -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN" \
             -H "X-Resend-Api-Key: $RESEND_API_KEY" \
             -H "X-Digest-From-Email: $DIGEST_FROM_EMAIL" \
             -H "X-Digest-Recipients: $DIGEST_RECIPIENTS" \

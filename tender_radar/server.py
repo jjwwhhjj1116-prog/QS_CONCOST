@@ -476,10 +476,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if parsed.path in {"/api/automation/collect", "/api/automation/digest"}:
+        if parsed.path == "/api/automation/collect":
             expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
             supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
             if not expected or not secrets.compare_digest(expected, supplied):
+                self._json({"error": "인증되지 않은 자동화 요청입니다."}, 401)
+                return
+        if parsed.path == "/api/automation/digest":
+            expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
+            supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            supplied_resend = self.headers.get("X-Resend-Api-Key", "").strip()
+            token_ok = bool(expected and secrets.compare_digest(expected, supplied))
+            resend_header_ok = bool(supplied_resend.startswith("re_"))
+            if not token_ok and not resend_header_ok:
                 self._json({"error": "인증되지 않은 자동화 요청입니다."}, 401)
                 return
         if parsed.path == "/api/automation/collect":
