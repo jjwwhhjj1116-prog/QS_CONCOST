@@ -2,8 +2,11 @@ name: CONCOST daily email digest
 
 on:
   schedule:
-    # 01:00 UTC = 10:00 KST, Monday-Friday
+    # 01:00 UTC = 10:00 KST, Monday-Friday.
+    # Run a few guarded attempts because scheduled GitHub Actions can be delayed/skipped.
     - cron: "0 1 * * 1-5"
+    - cron: "10 1 * * 1-5"
+    - cron: "20 1 * * 1-5"
   workflow_dispatch:
 
 jobs:

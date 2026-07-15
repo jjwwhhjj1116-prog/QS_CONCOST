@@ -499,6 +499,10 @@ class Handler(BaseHTTPRequestHandler):
             if get_setting(self.settings.db_path, "digest_enabled", "1") != "1":
                 self._json({"ok": True, "skipped": True, "reason": "예약 발송 꺼짐"})
                 return
+            today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+            if get_setting(self.settings.db_path, "last_automation_digest", "") == today:
+                self._json({"ok": True, "skipped": True, "reason": "오늘 예약 메일은 이미 발송되었습니다."})
+                return
             if not self.digest_lock.acquire(blocking=False):
                 self._json({"error": "이미 발송 작업이 진행 중입니다."}, 409)
                 return
@@ -508,12 +512,14 @@ class Handler(BaseHTTPRequestHandler):
                     for email in self.headers.get("X-Digest-Recipients", "").split(",")
                     if valid_email(email.strip().lower())
                 ]
-                self._json(send_email_digest(
+                result = send_email_digest(
                     self.settings.db_path,
                     api_key_override=self.headers.get("X-Resend-Api-Key", "").strip(),
                     from_email_override=self.headers.get("X-Digest-From-Email", "").strip(),
                     recipients_override=recipients or None,
-                ))
+                )
+                set_setting(self.settings.db_path, "last_automation_digest", today)
+                self._json(result)
             except Exception as exc:
                 self._json({"error": str(exc)}, 502)
             finally:
