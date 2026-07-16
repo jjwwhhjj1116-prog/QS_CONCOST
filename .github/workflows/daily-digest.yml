@@ -1,10 +1,8 @@
-name: CONCOST daily email digest
+name: CONCOST manual email digest
 
 on:
-  schedule:
-    # 01:00 UTC = 10:00 KST, Monday-Friday.
-    # If GitHub runs this late, the server will skip instead of sending at the wrong time.
-    - cron: "0 1 * * 1-5"
+  # Render Cron is responsible for the exact 10:00 KST weekday schedule.
+  # Keep this workflow only for manual delivery tests.
   workflow_dispatch:
 
 jobs:
@@ -12,12 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Trigger 10:00 KST weekday email digest
+      - name: Trigger manual email digest test
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           DIGEST_FROM_EMAIL: ${{ secrets.DIGEST_FROM_EMAIL }}
           DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
-          IS_SCHEDULED: ${{ github.event_name == 'schedule' }}
         run: |
           test -n "$RESEND_API_KEY"
           test -n "$DIGEST_FROM_EMAIL"
@@ -28,5 +25,5 @@ jobs:
             -H "X-Resend-Api-Key: $RESEND_API_KEY" \
             -H "X-Digest-From-Email: $DIGEST_FROM_EMAIL" \
             -H "X-Digest-Recipients: $DIGEST_RECIPIENTS" \
-            -H "X-Digest-Scheduled: $IS_SCHEDULED" \
+            -H "X-Digest-Scheduled: false" \
             https://qs-concost.onrender.com/api/automation/digest

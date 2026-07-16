@@ -342,13 +342,17 @@ class MVPTests(unittest.TestCase):
 
     def test_weekday_automation_windows(self):
         friday_collect = datetime(2026, 7, 10, 9, 0)
+        friday_late_collect = datetime(2026, 7, 10, 9, 10)
         friday_digest = datetime(2026, 7, 10, 10, 0)
+        friday_late_window_digest = datetime(2026, 7, 10, 10, 10)
         friday_late_digest = datetime(2026, 7, 10, 12, 57)
         saturday_collect = datetime(2026, 7, 11, 9, 0)
         self.assertTrue(in_collect_window(friday_collect))
+        self.assertFalse(in_collect_window(friday_late_collect))
         self.assertFalse(in_collect_window(friday_digest))
         self.assertTrue(in_digest_window(friday_digest))
         self.assertTrue(in_digest_send_window(friday_digest))
+        self.assertFalse(in_digest_send_window(friday_late_window_digest))
         self.assertFalse(in_digest_send_window(friday_late_digest))
         self.assertFalse(in_collect_window(saturday_collect))
         self.assertFalse(in_digest_window(saturday_collect.replace(hour=10)))

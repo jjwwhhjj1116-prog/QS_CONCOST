@@ -1,9 +1,8 @@
-name: CONCOST daily data collection
+name: CONCOST manual data collection
 
 on:
-  schedule:
-    # 00:00 UTC = 09:00 KST, Monday-Friday
-    - cron: "0 0 * * 1-5"
+  # Render Cron is responsible for the exact 09:00 KST weekday schedule.
+  # Keep this workflow only for manual collection tests.
   workflow_dispatch:
 
 jobs:
@@ -11,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Trigger 09:00 KST weekday collection
+      - name: Trigger manual collection test
         env:
           DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
         run: |
@@ -19,4 +18,5 @@ jobs:
           curl --fail --retry 5 --retry-all-errors --retry-delay 20 --max-time 540 \
             -X POST \
             -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN" \
+            -H "X-Collect-Scheduled: false" \
             https://qs-concost.onrender.com/api/automation/collect

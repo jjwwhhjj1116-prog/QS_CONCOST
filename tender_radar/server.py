@@ -49,17 +49,17 @@ def is_kst_weekday(now: datetime) -> bool:
 
 def in_collect_window(now: datetime) -> bool:
     minute = now.hour * 60 + now.minute
-    return is_kst_weekday(now) and 9 * 60 <= minute < 10 * 60
+    return is_kst_weekday(now) and 9 * 60 <= minute < 9 * 60 + 10
 
 
 def in_digest_window(now: datetime) -> bool:
     minute = now.hour * 60 + now.minute
-    return is_kst_weekday(now) and 10 * 60 <= minute < 11 * 60
+    return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 10
 
 
 def in_digest_send_window(now: datetime) -> bool:
     minute = now.hour * 60 + now.minute
-    return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 30
+    return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 10
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -497,6 +497,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "인증되지 않은 자동화 요청입니다."}, 401)
                 return
         if parsed.path == "/api/automation/collect":
+            now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+            if self.headers.get("X-Collect-Scheduled", "").strip().lower() == "true" and not in_collect_window(now_kst):
+                self._json({
+                    "ok": True, "skipped": True,
+                    "reason": f"예약 수집 실행이 지연되어 실행하지 않았습니다. 현재 한국시간 {now_kst:%H:%M}",
+                })
+                return
             if not self.collection_lock.acquire(blocking=False):
                 self._json({"error": "이미 수집 작업이 진행 중입니다."}, 409)
                 return
@@ -850,14 +857,13 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                             print(f"09:00 예약수집 실패: {exc}")
                         finally:
                             Handler.collection_lock.release()
-                # GitHub's scheduled wake-up can be delayed, so keep a one-hour recovery window.
                 if in_digest_window(now):
-                    last = get_setting(settings.db_path, "last_scheduled_digest", "")
+                    last = get_setting(settings.db_path, "last_automation_digest", "")
                     enabled = get_setting(settings.db_path, "digest_enabled", "1") == "1"
                     if enabled and last != today and Handler.digest_lock.acquire(blocking=False):
                         try:
-                            set_setting(settings.db_path, "last_scheduled_digest", today)
                             send_email_digest(settings.db_path)
+                            set_setting(settings.db_path, "last_automation_digest", today)
                         except Exception as exc:
                             print(f"10:00 예약메일 실패: {exc}")
                         finally:
