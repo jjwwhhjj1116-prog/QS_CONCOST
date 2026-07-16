@@ -26,7 +26,7 @@ from .collector import collect_all, collect_news
 from . import expressway, g2b, jiwoncok, kapt, law_news, lh, official_news
 from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
 from .jiwoncok import parse_jiwoncok_email
-from .scoring import MIN_NOTICE_SCORE
+from .scoring import MIN_NOTICE_SCORE, should_keep_notice
 from .secrets_store import get_secret, migrate_secret, set_secret
 
 
@@ -265,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._update_collection_job(job_id, **totals, message=f"{source} 지연으로 패스하고 다음 소스로 넘어갑니다.")
                     continue
                 if kind == "notice":
-                    relevant = [row for row in rows if int(row.get("score") or 0) >= MIN_NOTICE_SCORE]
+                    relevant = [row for row in rows if should_keep_notice(row)]
                     counts = save_notices(relevant)
                     totals["total"] += len(relevant)
                     totals["inserted"] += counts["inserted"]
@@ -623,7 +623,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 finally:
                     pool.shutdown(wait=False, cancel_futures=True)
-                rows = [row for row in collected if int(row.get("score") or 0) >= MIN_NOTICE_SCORE]
+                rows = [row for row in collected if should_keep_notice(row)]
                 counts = {"inserted": 0, "updated": 0, "unchanged": 0}
                 for notice in rows:
                     counts[upsert_notice(self.settings.db_path, notice)] += 1
@@ -638,7 +638,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json(250_000)
                 text = str(payload.get("text", ""))
                 parsed_rows = parse_jiwoncok_email(text)
-                notices = [row for row in parsed_rows if int(row.get("score") or 0) >= MIN_NOTICE_SCORE]
+                notices = [row for row in parsed_rows if should_keep_notice(row)]
                 counts = {"inserted": 0, "updated": 0, "unchanged": 0}
                 for notice in notices:
                     counts[upsert_notice(self.settings.db_path, notice)] += 1

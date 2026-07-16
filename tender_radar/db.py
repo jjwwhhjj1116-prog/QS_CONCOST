@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .scoring import MIN_NOTICE_SCORE, SCORING_VERSION, score_notice
+from .scoring import MIN_NOTICE_SCORE, SCORING_VERSION, score_notice, should_keep_notice
 
 
 SCHEMA = """
@@ -407,7 +407,8 @@ def list_notices(
         item["matched_keywords"] = json.loads(item["matched_keywords"])
         item.pop("raw_json", None)
         item.pop("content_hash", None)
-        result.append(item)
+        if should_keep_notice(item, min_score):
+            result.append(item)
     return result
 
 

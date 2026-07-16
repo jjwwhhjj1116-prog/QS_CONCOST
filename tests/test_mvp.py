@@ -18,7 +18,7 @@ from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
 from tender_radar.jiwoncok import active_source_pages, discover_board_urls, parse_jiwoncok_email, parse_source_page
-from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice
+from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
 from tender_radar.server import Handler, in_collect_window, in_digest_send_window, in_digest_window
 
 
@@ -56,17 +56,41 @@ class MVPTests(unittest.TestCase):
         self.assertGreaterEqual(score, 50)
         self.assertTrue(any("직접시공 감점" in item for item in matched))
 
+    def test_safety_diagnosis_notices_are_limited_to_seoul(self):
+        seoul_notice = {
+            "title": "공동주택 정밀안전진단 용역",
+            "institution": "서울특별시 강남구",
+            "region": "강남구",
+            "score": 70,
+            "matched_keywords": ["전문업무:안전·구조진단(정밀안전진단)"],
+        }
+        non_seoul_notice = {
+            **seoul_notice,
+            "institution": "부산광역시",
+            "region": "부산",
+        }
+        self.assertTrue(should_keep_notice(seoul_notice))
+        self.assertFalse(should_keep_notice(non_seoul_notice))
+
     def test_collection_keeps_only_score_40_or_higher(self):
         high = {"source": "테스트", "title": "공사비 검증", "score": MIN_NOTICE_SCORE}
+        seoul_safety = {
+            "source": "테스트", "title": "정밀안전진단 용역", "institution": "서울특별시",
+            "region": "서울", "score": 70,
+        }
+        non_seoul_safety = {
+            "source": "테스트", "title": "정밀안전진단 용역", "institution": "부산광역시",
+            "region": "부산", "score": 70,
+        }
         low = {"source": "테스트", "title": "도장 시공", "score": MIN_NOTICE_SCORE - 1}
-        with patch("tender_radar.collector.g2b.collect_recent", return_value=[high, low]), patch(
+        with patch("tender_radar.collector.g2b.collect_recent", return_value=[high, seoul_safety, non_seoul_safety, low]), patch(
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
         ):
             notices, statuses = collect_all("key", 48)
-        self.assertEqual(notices, [high])
-        self.assertEqual(statuses[0]["filtered"], 1)
+        self.assertEqual(notices, [high, seoul_safety])
+        self.assertEqual(statuses[0]["filtered"], 2)
 
     def test_collection_timeout_does_not_fail_fast_sources(self):
         def slow_source(*_):

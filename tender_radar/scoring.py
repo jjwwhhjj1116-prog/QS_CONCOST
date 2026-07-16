@@ -67,6 +67,19 @@ DIRECT_CONSTRUCTION = {
 
 IRRELEVANT = ("식자재", "보험", "단순 임대", "폐기물 운반", "청소용역", "경비용역")
 
+SAFETY_DIAGNOSIS_TERMS = (
+    "정밀안전진단", "정밀안전점검", "안전진단", "안전점검",
+    "구조안전", "내진성능평가", "내진성능", "시설물 안전",
+)
+
+SEOUL_TERMS = (
+    "서울", "서울특별시", "seoul",
+    "종로구", "중구", "용산구", "성동구", "광진구", "동대문구", "중랑구",
+    "성북구", "강북구", "도봉구", "노원구", "은평구", "서대문구", "마포구",
+    "양천구", "강서구", "구로구", "금천구", "영등포구", "동작구", "관악구",
+    "서초구", "강남구", "송파구", "강동구",
+)
+
 
 def _best_match(text: str, keywords: dict[str, int]) -> tuple[str, int] | None:
     matches = ((keyword, weight) for keyword, weight in keywords.items() if keyword.lower() in text)
@@ -109,3 +122,26 @@ def score_notice(*parts: object) -> tuple[int, list[str]]:
             matched.append(f"업무제외:{keyword}")
 
     return max(0, min(100, score)), matched
+
+
+def is_safety_diagnosis_notice(notice: dict[str, object]) -> bool:
+    text = " ".join(str(notice.get(key, "") or "") for key in (
+        "title", "institution", "region", "category", "source"
+    )).lower()
+    matched_keywords = " ".join(str(item) for item in notice.get("matched_keywords", []) or []).lower()
+    return any(term.lower() in text or term.lower() in matched_keywords for term in SAFETY_DIAGNOSIS_TERMS)
+
+
+def is_seoul_notice(notice: dict[str, object]) -> bool:
+    text = " ".join(str(notice.get(key, "") or "") for key in (
+        "title", "institution", "region", "source"
+    )).lower()
+    return any(term.lower() in text for term in SEOUL_TERMS)
+
+
+def should_keep_notice(notice: dict[str, object], min_score: int = MIN_NOTICE_SCORE) -> bool:
+    if int(notice.get("score") or 0) < min_score:
+        return False
+    if is_safety_diagnosis_notice(notice) and not is_seoul_notice(notice):
+        return False
+    return True

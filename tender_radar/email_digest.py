@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from .db import connect, get_setting, init_db, list_digest_recipients
 from .secrets_store import get_secret
+from .scoring import should_keep_notice
 
 
 SEOUL = ZoneInfo("Asia/Seoul")
@@ -85,6 +86,8 @@ def _rows(db_path: Path, kind: str, already_sent: bool, limit: int, today_only: 
             item["matched_keywords"] = json.loads(item.get("matched_keywords", "[]"))
         except json.JSONDecodeError:
             item["matched_keywords"] = []
+        if kind == "notice" and not should_keep_notice(item):
+            continue
         if today_only and kind == "news" and not _is_today_news(item):
             continue
         result.append(item)
