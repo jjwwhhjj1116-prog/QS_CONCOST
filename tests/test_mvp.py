@@ -19,7 +19,7 @@ from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list 
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
 from tender_radar.jiwoncok import active_source_pages, discover_board_urls, parse_jiwoncok_email, parse_source_page
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice
-from tender_radar.server import Handler, in_collect_window, in_digest_window
+from tender_radar.server import Handler, in_collect_window, in_digest_send_window, in_digest_window
 
 
 class MVPTests(unittest.TestCase):
@@ -343,10 +343,13 @@ class MVPTests(unittest.TestCase):
     def test_weekday_automation_windows(self):
         friday_collect = datetime(2026, 7, 10, 9, 0)
         friday_digest = datetime(2026, 7, 10, 10, 0)
+        friday_late_digest = datetime(2026, 7, 10, 12, 57)
         saturday_collect = datetime(2026, 7, 11, 9, 0)
         self.assertTrue(in_collect_window(friday_collect))
         self.assertFalse(in_collect_window(friday_digest))
         self.assertTrue(in_digest_window(friday_digest))
+        self.assertTrue(in_digest_send_window(friday_digest))
+        self.assertFalse(in_digest_send_window(friday_late_digest))
         self.assertFalse(in_collect_window(saturday_collect))
         self.assertFalse(in_digest_window(saturday_collect.replace(hour=10)))
 

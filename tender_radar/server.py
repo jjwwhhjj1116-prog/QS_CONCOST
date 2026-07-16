@@ -57,6 +57,11 @@ def in_digest_window(now: datetime) -> bool:
     return is_kst_weekday(now) and 10 * 60 <= minute < 11 * 60
 
 
+def in_digest_send_window(now: datetime) -> bool:
+    minute = now.hour * 60 + now.minute
+    return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 30
+
+
 class Handler(BaseHTTPRequestHandler):
     settings: Settings
     sessions: dict[str, tuple[str, float]] = {}
@@ -508,7 +513,14 @@ class Handler(BaseHTTPRequestHandler):
             if get_setting(self.settings.db_path, "digest_enabled", "1") != "1":
                 self._json({"ok": True, "skipped": True, "reason": "예약 발송 꺼짐"})
                 return
-            today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+            now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+            if self.headers.get("X-Digest-Scheduled", "").strip().lower() == "true" and not in_digest_send_window(now_kst):
+                self._json({
+                    "ok": True, "skipped": True,
+                    "reason": f"예약 실행이 지연되어 발송하지 않았습니다. 현재 한국시간 {now_kst:%H:%M}",
+                })
+                return
+            today = now_kst.date().isoformat()
             if get_setting(self.settings.db_path, "last_automation_digest", "") == today:
                 self._json({"ok": True, "skipped": True, "reason": "오늘 예약 메일은 이미 발송되었습니다."})
                 return

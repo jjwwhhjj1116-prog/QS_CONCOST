@@ -3,10 +3,8 @@ name: CONCOST daily email digest
 on:
   schedule:
     # 01:00 UTC = 10:00 KST, Monday-Friday.
-    # Run a few guarded attempts because scheduled GitHub Actions can be delayed/skipped.
+    # If GitHub runs this late, the server will skip instead of sending at the wrong time.
     - cron: "0 1 * * 1-5"
-    - cron: "10 1 * * 1-5"
-    - cron: "20 1 * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -19,13 +17,16 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           DIGEST_FROM_EMAIL: ${{ secrets.DIGEST_FROM_EMAIL }}
           DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+          IS_SCHEDULED: ${{ github.event_name == 'schedule' }}
         run: |
           test -n "$RESEND_API_KEY"
           test -n "$DIGEST_FROM_EMAIL"
           test -n "$DIGEST_RECIPIENTS"
+          echo "Current KST: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
           curl --fail --retry 5 --retry-all-errors --retry-delay 20 --max-time 540 \
             -X POST \
             -H "X-Resend-Api-Key: $RESEND_API_KEY" \
             -H "X-Digest-From-Email: $DIGEST_FROM_EMAIL" \
             -H "X-Digest-Recipients: $DIGEST_RECIPIENTS" \
+            -H "X-Digest-Scheduled: $IS_SCHEDULED" \
             https://qs-concost.onrender.com/api/automation/digest
