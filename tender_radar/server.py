@@ -89,6 +89,15 @@ def storage_is_persistent(db_path: Path) -> bool:
     return False
 
 
+def auto_collect_on_start_enabled() -> bool:
+    configured = os.getenv("AUTO_COLLECT_ON_START", "").strip().lower()
+    if configured:
+        return configured in {"1", "true", "yes"}
+    # Render sets RENDER=true automatically. Existing Blueprint services do not
+    # always apply newly added render.yaml variables on a source-only deploy.
+    return os.getenv("RENDER", "").strip().lower() == "true"
+
+
 class Handler(BaseHTTPRequestHandler):
     settings: Settings
     sessions: dict[str, tuple[str, float]] = {}
@@ -879,7 +888,7 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
         worker = threading.Thread(target=auto_collect, name="auto-collector", daemon=True)
         worker.start()
     handler = type("ConfiguredHandler", (Handler,), {"settings": settings})
-    if os.getenv("AUTO_COLLECT_ON_START", "0").lower() in {"1", "true", "yes"}:
+    if auto_collect_on_start_enabled():
         def restore_ephemeral_database() -> None:
             # 서버가 먼저 응답 가능 상태가 된 뒤, 비어 있는 임시 DB만 백그라운드에서 복구한다.
             time.sleep(1)

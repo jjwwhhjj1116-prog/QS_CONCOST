@@ -22,10 +22,19 @@ from tender_radar.jiwoncok import (
     parse_jiwoncok_email, parse_source_page,
 )
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
-from tender_radar.server import Handler, in_collect_window, in_digest_send_window, in_digest_window
+from tender_radar.server import (
+    Handler, auto_collect_on_start_enabled, in_collect_window,
+    in_digest_send_window, in_digest_window,
+)
 
 
 class MVPTests(unittest.TestCase):
+    def test_render_enables_startup_collection_without_extra_setting(self):
+        with patch.dict("os.environ", {"RENDER": "true"}, clear=True):
+            self.assertTrue(auto_collect_on_start_enabled())
+        with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "false"}, clear=True):
+            self.assertFalse(auto_collect_on_start_enabled())
+
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
         self.assertGreaterEqual(score, 70)
