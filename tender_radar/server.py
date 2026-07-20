@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -141,10 +144,44 @@ class Handler(BaseHTTPRequestHandler):
         token = morsel.value
         with self.session_lock:
             session = self.sessions.get(token)
-            if not session or session[1] < time.time():
+            if session and session[1] >= time.time():
+                return session[0]
+            if session:
                 self.sessions.pop(token, None)
+        return self._verify_signed_session(token)
+
+    def _session_signing_key(self) -> bytes:
+        value = os.getenv("APP_SECRET_KEY", "").encode("utf-8")
+        return value if len(value) >= 24 else b""
+
+    def _make_signed_session(self, username: str, expires_at: float) -> str:
+        key = self._session_signing_key()
+        if not key:
+            return ""
+        version = get_setting(self.settings.db_path, "admin_session_version", "1")
+        payload = f"{username}|{int(expires_at)}|{version}|{secrets.token_urlsafe(8)}".encode("utf-8")
+        encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+        signature = hmac.new(key, encoded.encode("ascii"), hashlib.sha256).hexdigest()
+        return f"v1.{encoded}.{signature}"
+
+    def _verify_signed_session(self, token: str) -> str | None:
+        key = self._session_signing_key()
+        if not key or not token.startswith("v1."):
+            return None
+        try:
+            _, encoded, supplied_signature = token.split(".", 2)
+            expected = hmac.new(key, encoded.encode("ascii"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected, supplied_signature):
                 return None
-        return session[0]
+            padded = encoded + "=" * (-len(encoded) % 4)
+            username, expires, version, _ = base64.urlsafe_b64decode(padded).decode("utf-8").split("|", 3)
+            if int(expires) < int(time.time()):
+                return None
+            if version != get_setting(self.settings.db_path, "admin_session_version", "1"):
+                return None
+            return username
+        except (ValueError, UnicodeError):
+            return None
 
     def _require_admin(self) -> str | None:
         username = self._admin_username()
@@ -518,7 +555,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "아이디 또는 비밀번호가 올바르지 않습니다."}, 401)
                 return
             self.login_failures.pop(ip, None)
-            token = secrets.token_urlsafe(32)
+            token = self._make_signed_session(username, now + 28_800) or secrets.token_urlsafe(32)
             with self.session_lock:
                 self.sessions[token] = (username, now + 28_800)
             data = json.dumps({"ok": True, "username": username}, ensure_ascii=False).encode("utf-8")
@@ -844,6 +881,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "새 비밀번호는 영문과 숫자를 포함해 10자 이상이어야 합니다."}, 400)
                 return
             change_admin_password(self.settings.db_path, username, new)
+            set_setting(self.settings.db_path, "admin_session_version", str(time.time_ns()))
             with self.session_lock:
                 self.sessions.clear()
             data = json.dumps({"ok": True, "login_required": True}).encode("utf-8")

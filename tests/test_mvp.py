@@ -73,6 +73,20 @@ class MVPTests(unittest.TestCase):
             set_setting(db, "law_api_oc", "portable:not-valid-encrypted-data")
             self.assertEqual(get_secret(db, "law_api_oc", ""), "")
 
+    def test_signed_admin_session_survives_process_memory_reset(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"APP_SECRET_KEY": "stable-render-session-secret-123456"}, clear=True
+        ):
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            token = handler._make_signed_session("concost", time.time() + 600)
+            handler.headers = {"Cookie": f"qs_admin_session={token}"}
+            with Handler.session_lock:
+                Handler.sessions = {}
+            self.assertEqual(handler._admin_username(), "concost")
+
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
         self.assertGreaterEqual(score, 70)
