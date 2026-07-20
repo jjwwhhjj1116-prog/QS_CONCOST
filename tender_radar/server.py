@@ -169,6 +169,22 @@ class Handler(BaseHTTPRequestHandler):
             job["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
 
     @classmethod
+    def _create_collection_job(cls, message: str = "수집 작업을 시작했습니다. 수집되는 자료부터 바로 저장합니다.") -> str:
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        job_id = secrets.token_urlsafe(12)
+        cls.collection_lock_owner = job_id
+        with cls.collection_jobs_lock:
+            cls.collection_jobs[job_id] = {
+                "id": job_id, "status": "running", "ok": True, "partial": False,
+                "started_at": now, "updated_at": now, "completed_at": "",
+                "message": message,
+                "percent": 1, "source_total": 1, "sources": [],
+                "total": 0, "inserted": 0, "updated": 0, "unchanged": 0,
+                "news_inserted": 0, "news_updated": 0,
+            }
+        return job_id
+
+    @classmethod
     def _append_collection_source(cls, job_id: str, source_status: dict) -> None:
         with cls.collection_jobs_lock:
             job = cls.collection_jobs.get(job_id)
@@ -739,20 +755,19 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"error": "이미 수집 작업이 진행 중입니다."}, 409)
                 return
-        # lock acquired for the new job from here.
-        law_key = get_secret(self.settings.db_path, "law_api_oc")
-        now = datetime.now().astimezone().isoformat(timespec="seconds")
-        job_id = secrets.token_urlsafe(12)
-        type(self).collection_lock_owner = job_id
-        with self.collection_jobs_lock:
-            self.collection_jobs[job_id] = {
-                "id": job_id, "status": "running", "ok": True, "partial": False,
-                "started_at": now, "updated_at": now, "completed_at": "",
-                "message": "수집 작업을 시작했습니다. 수집되는 자료부터 바로 저장합니다.",
-                "percent": 1, "source_total": 1, "sources": [],
-                "total": 0, "inserted": 0, "updated": 0, "unchanged": 0,
-                "news_inserted": 0, "news_updated": 0,
-            }
+        # Lock acquired for the new job from here. Never leave it held when DB
+        # configuration loading fails between acquisition and worker startup.
+        try:
+            law_key = get_secret(self.settings.db_path, "law_api_oc")
+            job_id = type(self)._create_collection_job()
+        except Exception as exc:
+            type(self).collection_lock_owner = None
+            try:
+                self.collection_lock.release()
+            except RuntimeError:
+                pass
+            self._json({"error": f"수집 작업 준비 실패: {exc}"}, 502)
+            return
         worker = threading.Thread(
             target=self._run_collection_job,
             args=(job_id, service_key, law_key, lookback_hours),
@@ -904,18 +919,28 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
             try:
                 if stats(settings.db_path).get("total", 0) > 0:
                     return
-                if not Handler.collection_lock.acquire(blocking=False):
+                if not handler.collection_lock.acquire(blocking=False):
                     return
-                try:
-                    from .cli import collect
-                    result = collect()
-                    if result == 0:
-                        today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
-                        set_setting(settings.db_path, "last_scheduled_collect", today)
-                finally:
-                    Handler.collection_lock.release()
+                service_key = get_secret(settings.db_path, "public_data_api_key", settings.service_key)
+                law_key = get_secret(settings.db_path, "law_api_oc")
+                job_id = handler._create_collection_job("서버 시작 후 비어 있는 자료를 자동 복구하고 있습니다.")
+                # _run_collection_job only needs the configured settings; using the
+                # same tracked job path lets the admin UI attach instead of seeing
+                # an unexplained lock/409 failure during startup recovery.
+                runner = object.__new__(handler)
+                runner.settings = settings
+                runner._run_collection_job(job_id, service_key, law_key, settings.lookback_hours)
+                job = handler._get_collection_job(job_id) or {}
+                if job.get("ok"):
+                    today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+                    set_setting(settings.db_path, "last_scheduled_collect", today)
             except Exception as exc:
                 print(f"시작 시 자료복구 실패: {exc}")
+                handler.collection_lock_owner = None
+                try:
+                    handler.collection_lock.release()
+                except RuntimeError:
+                    pass
 
         restore_worker = threading.Thread(
             target=restore_ephemeral_database,

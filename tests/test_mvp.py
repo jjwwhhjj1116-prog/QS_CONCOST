@@ -48,6 +48,21 @@ class MVPTests(unittest.TestCase):
             "concost-daily-digest-2026-07-20",
         )
 
+    def test_startup_collection_job_is_visible_to_admin_polling(self):
+        with Handler.collection_jobs_lock:
+            Handler.collection_jobs = {}
+        Handler.collection_lock_owner = None
+        job_id = Handler._create_collection_job("서버 시작 자동 복구")
+        try:
+            running = Handler._latest_running_collection_job()
+            self.assertEqual(running["id"], job_id)
+            self.assertEqual(running["status"], "running")
+            self.assertIn("자동 복구", running["message"])
+        finally:
+            with Handler.collection_jobs_lock:
+                Handler.collection_jobs = {}
+            Handler.collection_lock_owner = None
+
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
         self.assertGreaterEqual(score, 70)
