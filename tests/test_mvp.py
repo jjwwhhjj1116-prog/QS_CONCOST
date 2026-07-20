@@ -22,6 +22,7 @@ from tender_radar.jiwoncok import (
     parse_jiwoncok_email, parse_source_page,
 )
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
+from tender_radar.secrets_store import get_secret
 from tender_radar.server import (
     Handler, auto_collect_on_start_enabled, internal_scheduler_enabled, in_collect_window,
     in_digest_send_window, in_digest_window,
@@ -62,6 +63,15 @@ class MVPTests(unittest.TestCase):
             with Handler.collection_jobs_lock:
                 Handler.collection_jobs = {}
             Handler.collection_lock_owner = None
+
+    def test_unreadable_optional_secret_does_not_abort_collection(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"APP_SECRET_KEY": "test-master-key-that-is-long-enough"}, clear=True
+        ):
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            set_setting(db, "law_api_oc", "portable:not-valid-encrypted-data")
+            self.assertEqual(get_secret(db, "law_api_oc", ""), "")
 
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")

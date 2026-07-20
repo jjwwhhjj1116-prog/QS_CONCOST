@@ -108,7 +108,16 @@ def get_secret(db_path: Path, key: str, default: str = "") -> str:
     if env_value:
         return env_value
     stored = get_setting(db_path, key, "")
-    return unprotect_secret(stored) if stored else default
+    if not stored:
+        return default
+    try:
+        return unprotect_secret(stored)
+    except (OSError, RuntimeError, ValueError, UnicodeError):
+        # A secret encrypted by another Windows account or with an old
+        # APP_SECRET_KEY must not abort otherwise successful bid collection.
+        # Environment variables still take precedence, and the admin can replace
+        # an unreadable stored value explicitly.
+        return default
 
 
 def migrate_secret(db_path: Path, key: str, fallback: str = "") -> None:
