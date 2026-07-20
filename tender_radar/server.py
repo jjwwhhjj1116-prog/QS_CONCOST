@@ -62,6 +62,33 @@ def in_digest_send_window(now: datetime) -> bool:
     return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 10
 
 
+def storage_is_persistent(db_path: Path) -> bool:
+    """Return true only when the database is on a real persistent mount.
+
+    A /var/data path alone is not proof of persistence on Render Free because the
+    directory can live on the instance's ephemeral root filesystem.
+    """
+    override = os.getenv("PERSISTENT_STORAGE", "").strip().lower()
+    if override in {"1", "true", "yes"}:
+        return True
+    if override in {"0", "false", "no"}:
+        return False
+    if os.name == "nt":
+        return True
+    try:
+        target = str(db_path.resolve())
+        for line in Path("/proc/mounts").read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            mount = parts[1].replace("\\040", " ")
+            if mount != "/" and (target == mount or target.startswith(mount.rstrip("/") + "/")):
+                return True
+    except OSError:
+        pass
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     settings: Settings
     sessions: dict[str, tuple[str, float]] = {}
@@ -360,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/admin/email-settings":
             if not self._require_admin():
                 return
-            persistent_db = os.getenv("DB_PATH", "").startswith("/var/data/")
+            persistent_db = storage_is_persistent(self.settings.db_path)
             resend_env = bool(os.getenv("RESEND_API_KEY", "").strip())
             from_env = bool(os.getenv("DIGEST_FROM_EMAIL", "").strip())
             recipients_env = bool(os.getenv("DIGEST_RECIPIENTS", "").strip())
@@ -511,6 +538,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from .cli import collect
                 result = collect()
+                if result == 0:
+                    set_setting(self.settings.db_path, "last_scheduled_collect", now_kst.date().isoformat())
                 self._json({"ok": result == 0, "collected": True}, 200 if result == 0 else 502)
             except Exception as exc:
                 self._json({"error": str(exc)}, 502)
@@ -536,6 +565,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "이미 발송 작업이 진행 중입니다."}, 409)
                 return
             try:
+                # Render 무료 웹서비스는 절전/재시작 시 로컬 SQLite가 초기화될 수 있다.
+                # 09시 수집 뒤 DB가 사라졌더라도 빈 메일을 보내지 않도록 10시 발송 직전에
+                # 당일 수집 이력을 확인하고 필요하면 자료를 다시 채운다.
+                last_collect = get_setting(self.settings.db_path, "last_scheduled_collect", "")
+                if last_collect != today or stats(self.settings.db_path).get("total", 0) == 0:
+                    if self.collection_lock.acquire(blocking=False):
+                        try:
+                            from .cli import collect
+                            collect_result = collect()
+                            if collect_result == 0:
+                                set_setting(self.settings.db_path, "last_scheduled_collect", today)
+                        finally:
+                            self.collection_lock.release()
                 recipients = [
                     email.strip().lower()
                     for email in self.headers.get("X-Digest-Recipients", "").split(",")
@@ -837,6 +879,32 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
         worker = threading.Thread(target=auto_collect, name="auto-collector", daemon=True)
         worker.start()
     handler = type("ConfiguredHandler", (Handler,), {"settings": settings})
+    if os.getenv("AUTO_COLLECT_ON_START", "0").lower() in {"1", "true", "yes"}:
+        def restore_ephemeral_database() -> None:
+            # 서버가 먼저 응답 가능 상태가 된 뒤, 비어 있는 임시 DB만 백그라운드에서 복구한다.
+            time.sleep(1)
+            try:
+                if stats(settings.db_path).get("total", 0) > 0:
+                    return
+                if not Handler.collection_lock.acquire(blocking=False):
+                    return
+                try:
+                    from .cli import collect
+                    result = collect()
+                    if result == 0:
+                        today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+                        set_setting(settings.db_path, "last_scheduled_collect", today)
+                finally:
+                    Handler.collection_lock.release()
+            except Exception as exc:
+                print(f"시작 시 자료복구 실패: {exc}")
+
+        restore_worker = threading.Thread(
+            target=restore_ephemeral_database,
+            name="startup-data-restore",
+            daemon=True,
+        )
+        restore_worker.start()
     if os.getenv("SCHEDULE_JOBS", "1").lower() in {"1", "true", "yes"}:
         def scheduled_jobs() -> None:
             from .cli import collect

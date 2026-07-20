@@ -6,7 +6,7 @@ import html
 import os
 import ssl
 from concurrent.futures import TimeoutError, ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import unquote, urljoin
@@ -34,6 +34,15 @@ WATCH_KEYWORDS = (
     "내진성능평가", "내진성능", "시설물 안전", "안전점검",
     "재건축", "재개발", "가로주택정비", "소규모주택정비",
     "FED 내역서", "BIM 산출", "구조 BIM",
+)
+BROAD_WATCH_KEYWORDS = ("정산", "내역서", "VE", "BIM", "재건축", "재개발", "정비사업")
+CONSTRUCTION_CONTEXT_TERMS = (
+    "공사", "건설", "건축", "설계", "원가", "공사비", "계약금액",
+    "물량", "수량", "구조", "공동주택", "사업비", "정비사업",
+)
+EXCLUDED_TITLE_TERMS = (
+    "모집 결과", "선정 결과", "선정결과", "심사 결과", "평가 결과",
+    "합격자", "채용", "교육생", "수강생",
 )
 BOARD_HINTS = (
     "고시", "공고", "공지", "알림", "입찰", "계약", "채용", "모집",
@@ -264,7 +273,15 @@ def _source_key(url: str) -> str:
 
 def _has_watch_keyword(text: str) -> bool:
     lowered = text.lower()
-    return any(keyword.lower() in lowered for keyword in WATCH_KEYWORDS)
+    if any(term.lower() in lowered for term in EXCLUDED_TITLE_TERMS):
+        return False
+    broad = {keyword.lower() for keyword in BROAD_WATCH_KEYWORDS}
+    if any(keyword.lower() in lowered for keyword in WATCH_KEYWORDS if keyword.lower() not in broad):
+        return True
+    return (
+        any(keyword.lower() in lowered for keyword in BROAD_WATCH_KEYWORDS)
+        and any(term.lower() in lowered for term in CONSTRUCTION_CONTEXT_TERMS)
+    )
 
 
 def _category_for(title: str, matched: list[str]) -> str:
@@ -303,10 +320,13 @@ def parse_source_page(html_text: str, base_url: str, institution: str = "") -> l
             continue
         seen.add(target)
         dates = DATE_RE.findall(context)
+        published_at = today
         deadline = ""
         if dates:
-            year, month, day = dates[-1]
-            deadline = f"{year}-{int(month):02d}-{int(day):02d}"
+            first_year, first_month, first_day = dates[0]
+            published_at = f"{first_year}-{int(first_month):02d}-{int(first_day):02d}"
+            last_year, last_month, last_day = dates[-1]
+            deadline = f"{last_year}-{int(last_month):02d}-{int(last_day):02d}"
         score, matched = score_notice(title, institution, context, SOURCE)
         rows.append({
             "source": SOURCE,
@@ -314,7 +334,7 @@ def parse_source_page(html_text: str, base_url: str, institution: str = "") -> l
             "category": _category_for(title, matched),
             "title": title,
             "institution": institution,
-            "published_at": today,
+            "published_at": published_at,
             "deadline_at": deadline,
             "estimated_price": None,
             "region": "",
@@ -415,10 +435,13 @@ def collect_source_page(source: dict[str, str]) -> list[dict[str, Any]]:
     return result
 
 
-def _collect_source_status(source: dict[str, str]) -> dict[str, Any]:
+def _collect_source_status(source: dict[str, str], cutoff_date: str) -> dict[str, Any]:
     try:
         rows = collect_source_page(source)
-        kept = [row for row in rows if should_keep_notice(row)]
+        kept = [
+            row for row in rows
+            if should_keep_notice(row) and (not row.get("published_at") or row["published_at"] >= cutoff_date)
+        ]
         return {
             "source": source["institution"],
             "ok": True,
@@ -440,7 +463,7 @@ def _collect_source_status(source: dict[str, str]) -> dict[str, Any]:
 
 
 def collect_recent_with_status(lookback_hours: int = 48) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    del lookback_hours  # 기관 게시판은 표준 날짜 필터가 없어 최신 목록에서 키워드로 선별한다.
+    cutoff_date = (datetime.now(SEOUL_TZ) - timedelta(hours=max(1, lookback_hours))).date().isoformat()
     result: list[dict[str, Any]] = []
     sources = active_source_pages()
     if not sources:
@@ -455,7 +478,7 @@ def collect_recent_with_status(lookback_hours: int = 48) -> tuple[list[dict[str,
     except ValueError:
         timeout_seconds = 8.0
     pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jiwoncok-source")
-    futures = {pool.submit(_collect_source_status, source): source for source in sources}
+    futures = {pool.submit(_collect_source_status, source, cutoff_date): source for source in sources}
     statuses: list[dict[str, Any]] = []
     pending = set(futures)
     try:

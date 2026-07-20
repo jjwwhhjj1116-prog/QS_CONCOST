@@ -12,6 +12,8 @@ services:
         value: /var/data/tender_radar.db
       - key: AUTO_COLLECT_INTERVAL_MINUTES
         value: 0
+      - key: AUTO_COLLECT_ON_START
+        value: "true"
       - key: SCHEDULE_JOBS
         value: "false"
       - key: COOKIE_SECURE

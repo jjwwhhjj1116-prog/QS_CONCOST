@@ -90,6 +90,7 @@ class MVPTests(unittest.TestCase):
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
+        ), patch("tender_radar.collector.jiwoncok.collect_recent", return_value=[]
         ):
             notices, statuses = collect_all("key", 48)
         self.assertEqual(notices, [high, seoul_safety])
@@ -104,12 +105,29 @@ class MVPTests(unittest.TestCase):
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
+        ), patch("tender_radar.collector.jiwoncok.collect_recent", return_value=[]
         ):
             notices, statuses = collect_all("key", 48, source_timeout_seconds=0.05)
         self.assertEqual(notices, [])
         self.assertFalse(statuses[0]["ok"])
         self.assertIn("제한시간", statuses[0]["error"])
         self.assertTrue(all(status["ok"] for status in statuses[1:]))
+
+    def test_daily_collection_includes_jiwoncok_sources(self):
+        row = {
+            "source": "지원COK", "source_key": "source-1", "category": "용역",
+            "title": "공사비 검증 용역", "institution": "서울특별시",
+            "score": 70, "matched_keywords": ["공사비 검증"],
+        }
+        with patch("tender_radar.collector.g2b.collect_recent", return_value=[]), patch(
+            "tender_radar.collector.lh.collect_recent", return_value=[]
+        ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
+            "tender_radar.collector.kapt.collect_recent", return_value=[]
+        ), patch("tender_radar.collector.jiwoncok.collect_recent", return_value=[row]):
+            notices, statuses = collect_all("key", 48)
+        self.assertEqual(notices, [row])
+        self.assertEqual(statuses[-1]["source"], "지원COK")
+        self.assertTrue(statuses[-1]["ok"])
 
     def test_server_collection_job_finishes_with_partial_timeout(self):
         def slow_source(*_):
@@ -258,6 +276,7 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(rows[0]["source"], "지원COK")
         self.assertEqual(rows[0]["source_key"], "11167")
         self.assertEqual(rows[0]["category"], "평가위원 모집")
+        self.assertEqual(rows[0]["published_at"], "2026-07-13")
         self.assertEqual(rows[0]["deadline_at"], "2026-07-15")
         self.assertGreaterEqual(rows[0]["score"], MIN_NOTICE_SCORE)
 
@@ -288,6 +307,15 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0]["category"], "용역")
         self.assertGreaterEqual(kept[0]["score"], MIN_NOTICE_SCORE)
+
+    def test_parse_jiwoncok_source_page_ignores_navigation_and_results(self):
+        page = """
+        <a href="/finance">공공기관 정산</a>
+        <a href="/result?seq=1">계약심의위원회 위원 공개모집 결과 공고</a>
+        <a href="/notice?seq=2">서울 청사 공사비 검증 용역 공고</a>
+        """
+        rows = parse_source_page(page, "https://www.example.go.kr/", "서울특별시")
+        self.assertEqual([row["title"] for row in rows], ["서울 청사 공사비 검증 용역 공고"])
 
     def test_discover_jiwoncok_board_urls(self):
         page = """
@@ -323,7 +351,7 @@ class MVPTests(unittest.TestCase):
             return [{
                 "source": "지원COK", "source_key": "good-1", "category": "평가위원 모집",
                 "title": "공법선정위원회 평가위원 모집", "institution": source["institution"],
-                "published_at": "2026-07-20", "deadline_at": "2026-07-21",
+                "published_at": datetime.now().astimezone().date().isoformat(), "deadline_at": "2026-07-21",
                 "estimated_price": None, "region": "", "notice_type": "신규",
                 "change_reason": "", "changed_at": "", "url": "https://good.example/1",
                 "score": 70, "matched_keywords": ["평가위원"], "raw": {},
