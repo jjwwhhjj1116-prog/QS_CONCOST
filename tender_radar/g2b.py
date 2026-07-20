@@ -108,8 +108,15 @@ def fetch_category(
         url = f"{BASE_URL}/{OPERATIONS[category]}?{urlencode(params)}"
         request = Request(url, headers={"User-Agent": "QS-Tender-Radar/0.1"})
         try:
-            with urlopen(request, timeout=12) as response:
-                raw = response.read().decode("utf-8")
+            raw = ""
+            for attempt in range(2):
+                try:
+                    with urlopen(request, timeout=12) as response:
+                        raw = response.read().decode("utf-8")
+                    break
+                except TimeoutError as exc:
+                    if attempt == 1:
+                        raise G2BError("나라장터 API 읽기 시간 초과(2회 재시도 실패)") from exc
         except HTTPError as exc:
             try:
                 detail = exc.read().decode("utf-8", errors="replace")[:300].replace("\n", " ")

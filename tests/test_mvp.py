@@ -1,3 +1,4 @@
+import json
 import tempfile
 import time
 import unittest
@@ -12,7 +13,7 @@ from tender_radar.db import (
 from tender_radar.email_digest import SEOUL, build_email_digest, build_resend_request, send_test_email
 from tender_radar.collector import collect_all
 from tender_radar.config import Settings
-from tender_radar.g2b import normalize_item
+from tender_radar.g2b import fetch_category, normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
@@ -91,6 +92,30 @@ class MVPTests(unittest.TestCase):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
         self.assertGreaterEqual(score, 70)
         self.assertTrue(any("공사비" in item for item in matched))
+
+    def test_g2b_retries_one_transient_read_timeout(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "response": {"header": {"resultCode": "00"}, "body": {
+                        "totalCount": 1,
+                        "items": {"item": [{
+                            "bidNtceNo": "retry-1", "bidNtceOrd": "00",
+                            "bidNtceNm": "공사비 검증 용역", "ntceInsttNm": "서울특별시",
+                        }]},
+                    }}
+                }).encode("utf-8")
+
+        with patch("tender_radar.g2b.urlopen", side_effect=[TimeoutError(), Response()]) as mocked:
+            rows = fetch_category("key", "용역", datetime(2026, 7, 19), datetime(2026, 7, 20))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(mocked.call_count, 2)
 
     def test_concost_specialties_score_high(self):
         cases = (
