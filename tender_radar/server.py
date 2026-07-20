@@ -98,6 +98,15 @@ def auto_collect_on_start_enabled() -> bool:
     return os.getenv("RENDER", "").strip().lower() == "true"
 
 
+def internal_scheduler_enabled() -> bool:
+    # Production scheduling belongs to the dedicated Render Cron services.
+    # A scheduler inside every web process can duplicate delivery after deploys,
+    # restarts, or scale-out regardless of local SQLite bookkeeping.
+    if os.getenv("RENDER", "").strip().lower() == "true":
+        return False
+    return os.getenv("SCHEDULE_JOBS", "1").strip().lower() in {"1", "true", "yes"}
+
+
 class Handler(BaseHTTPRequestHandler):
     settings: Settings
     sessions: dict[str, tuple[str, float]] = {}
@@ -914,7 +923,7 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
             daemon=True,
         )
         restore_worker.start()
-    if os.getenv("SCHEDULE_JOBS", "1").lower() in {"1", "true", "yes"}:
+    if internal_scheduler_enabled():
         def scheduled_jobs() -> None:
             from .cli import collect
             timezone = ZoneInfo("Asia/Seoul")

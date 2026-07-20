@@ -24,15 +24,18 @@ def valid_email(value: str) -> bool:
     return bool(EMAIL_RE.fullmatch(value.strip()))
 
 
-def build_resend_request(api_key: str, payload: bytes) -> Request:
+def build_resend_request(api_key: str, payload: bytes, idempotency_key: str = "") -> Request:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": RESEND_USER_AGENT,
+    }
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
     return Request(
         "https://api.resend.com/emails", data=payload, method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": RESEND_USER_AGENT,
-        },
+        headers=headers,
     )
 
 
@@ -242,12 +245,32 @@ def send_email_digest(
         "from": from_email, "to": recipients, "subject": digest["subject"],
         "html": digest["html"], "text": digest["text"],
     }, ensure_ascii=False).encode("utf-8")
-    request = build_resend_request(api_key, payload)
+    # Render Cron, GitHub Actions retry, or a server restart can trigger the same
+    # daily digest more than once. Resend retains this key for 24 hours, so the
+    # same KST-date digest is delivered only once even if local DB state resets.
+    digest_date = datetime.now(SEOUL).date().isoformat()
+    idempotency_key = f"concost-daily-digest-{digest_date}"
+    request = build_resend_request(api_key, payload, idempotency_key=idempotency_key)
     try:
         with urlopen(request, timeout=30) as response:
             response_data = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         error = exc.read().decode("utf-8", errors="replace")[:1000]
+        if exc.code == 409 and (
+            "invalid_idempotent_request" in error
+            or "concurrent_idempotent_requests" in error
+        ):
+            with connect(db_path) as conn:
+                conn.execute(
+                    "UPDATE digest_deliveries SET status='skipped',completed_at=?,error=? WHERE id=?",
+                    (datetime.now(SEOUL).isoformat(timespec="seconds"),
+                     "동일 날짜 메일이 이미 처리되어 중복 발송을 건너뜀", delivery_id),
+                )
+            return {
+                "ok": True, "skipped": True,
+                "reason": "오늘 메일은 이미 Resend에서 처리되었습니다.",
+                "delivery_id": delivery_id, "recipient_count": len(recipients), **counts,
+            }
         if "error code: 1010" in error.lower():
             error = "Resend가 요청 식별 헤더를 차단했습니다(1010). 최신 서버 코드로 다시 실행하세요."
         with connect(db_path) as conn:

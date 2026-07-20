@@ -23,7 +23,7 @@ from tender_radar.jiwoncok import (
 )
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
 from tender_radar.server import (
-    Handler, auto_collect_on_start_enabled, in_collect_window,
+    Handler, auto_collect_on_start_enabled, internal_scheduler_enabled, in_collect_window,
     in_digest_send_window, in_digest_window,
 )
 
@@ -34,6 +34,19 @@ class MVPTests(unittest.TestCase):
             self.assertTrue(auto_collect_on_start_enabled())
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "false"}, clear=True):
             self.assertFalse(auto_collect_on_start_enabled())
+
+    def test_render_web_process_never_runs_internal_scheduler(self):
+        with patch.dict("os.environ", {"RENDER": "true", "SCHEDULE_JOBS": "true"}, clear=True):
+            self.assertFalse(internal_scheduler_enabled())
+        with patch.dict("os.environ", {"SCHEDULE_JOBS": "true"}, clear=True):
+            self.assertTrue(internal_scheduler_enabled())
+
+    def test_resend_request_accepts_daily_idempotency_key(self):
+        request = build_resend_request("re_test", b"{}", "concost-daily-digest-2026-07-20")
+        self.assertEqual(
+            request.get_header("Idempotency-key"),
+            "concost-daily-digest-2026-07-20",
+        )
 
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
