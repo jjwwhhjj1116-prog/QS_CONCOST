@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import unquote, urljoin
 from urllib.request import Request, urlopen
 
-from .scoring import MIN_NOTICE_SCORE, score_notice
+from .scoring import score_notice, should_keep_notice
 
 
 SEOUL_TZ = datetime.now().astimezone().tzinfo
@@ -116,11 +116,14 @@ SOURCE_PAGES = (
 )
 
 CORE_INSTITUTIONS = {
-    "부산광역시",
     "서울교통공사",
+    "서울특별시 동대문구",
+    "구로구",
+    "강서구시설관리공단",
     "경기신용보증재단",
     "경기도",
     "경기주택도시공사",
+    "부산광역시",
 }
 
 
@@ -191,9 +194,9 @@ def _deadline(period: str) -> str:
 
 def _fetch_timeout_seconds() -> float:
     try:
-        return max(1.5, min(float(os.getenv("JIWONCOK_FETCH_TIMEOUT_SECONDS", "3")), 6.0))
+        return max(1.0, min(float(os.getenv("JIWONCOK_FETCH_TIMEOUT_SECONDS", "2")), 4.0))
     except ValueError:
-        return 3.0
+        return 2.0
 
 
 def _fetch(url: str) -> str:
@@ -204,7 +207,18 @@ def _fetch(url: str) -> str:
     with urlopen(request, timeout=_fetch_timeout_seconds()) as response:
         raw = response.read()
         charset = response.headers.get_content_charset() or "utf-8"
-    return raw.decode(charset, errors="replace")
+    candidates = [charset, "utf-8", "cp949", "euc-kr"]
+    decoded: list[tuple[int, str]] = []
+    for candidate in dict.fromkeys(candidates):
+        try:
+            text = raw.decode(candidate, errors="replace")
+        except LookupError:
+            continue
+        decoded.append((text.count("\ufffd"), text))
+    if not decoded:
+        return raw.decode("utf-8", errors="replace")
+    decoded.sort(key=lambda item: item[0])
+    return decoded[0][1]
 
 
 def _page_context(html_text: str, title: str) -> str:
@@ -373,36 +387,79 @@ def collect_source_page(source: dict[str, str]) -> list[dict[str, Any]]:
     return result
 
 
-def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
+def _collect_source_status(source: dict[str, str]) -> dict[str, Any]:
+    try:
+        rows = collect_source_page(source)
+        kept = [row for row in rows if should_keep_notice(row)]
+        return {
+            "source": source["institution"],
+            "ok": True,
+            "total": len(kept),
+            "filtered": len(rows) - len(kept),
+            "rows": kept,
+        }
+    except Exception as exc:
+        return {
+            "source": source.get("institution", "기관 미확인"),
+            "ok": False,
+            "total": 0,
+            "filtered": 0,
+            "rows": [],
+            "error": str(exc)[:240],
+        }
+
+
+def collect_recent_with_status(lookback_hours: int = 48) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     del lookback_hours  # 기관 게시판은 표준 날짜 필터가 없어 최신 목록에서 키워드로 선별한다.
     result: list[dict[str, Any]] = []
     sources = active_source_pages()
     if not sources:
-        return []
+        return [], []
     try:
         configured_workers = int(os.getenv("JIWONCOK_MAX_WORKERS", "3"))
     except ValueError:
         configured_workers = 3
     max_workers = max(1, min(configured_workers, len(sources), 4))
     try:
-        timeout_seconds = max(5.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "12")), 30.0))
+        timeout_seconds = max(4.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "8")), 15.0))
     except ValueError:
-        timeout_seconds = 12.0
+        timeout_seconds = 8.0
     pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jiwoncok-source")
-    futures = [pool.submit(collect_source_page, source) for source in sources]
+    futures = {pool.submit(_collect_source_status, source): source for source in sources}
+    statuses: list[dict[str, Any]] = []
+    pending = set(futures)
     try:
         for future in as_completed(futures, timeout=timeout_seconds):
+            pending.discard(future)
             try:
-                result.extend(future.result())
-            except Exception:
-                continue
+                status = future.result()
+            except Exception as exc:
+                source = futures[future]
+                status = {
+                    "source": source.get("institution", "기관 미확인"),
+                    "ok": False,
+                    "total": 0,
+                    "filtered": 0,
+                    "rows": [],
+                    "error": str(exc)[:240],
+                }
+            result.extend(status.pop("rows", []))
+            statuses.append(status)
     except TimeoutError:
         # 기관 수가 많아도 특정 지자체 사이트 하나 때문에 전체 수집이 멈추지 않게 한다.
         # 제한시간 안에 모인 결과만 먼저 반환하고 다음 예약 수집에서 보강한다.
         pass
     finally:
-        for future in futures:
+        for future in pending:
+            source = futures[future]
             future.cancel()
+            statuses.append({
+                "source": source.get("institution", "기관 미확인"),
+                "ok": False,
+                "total": 0,
+                "filtered": 0,
+                "error": f"{int(timeout_seconds)}초 제한시간 초과",
+            })
         pool.shutdown(wait=False, cancel_futures=True)
     deduped: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -411,9 +468,14 @@ def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
-        if int(item.get("score") or 0) >= MIN_NOTICE_SCORE:
+        if should_keep_notice(item):
             deduped.append(item)
-    return deduped
+    return deduped, statuses
+
+
+def collect_recent(lookback_hours: int = 48) -> list[dict[str, Any]]:
+    rows, _statuses = collect_recent_with_status(lookback_hours)
+    return rows
 
 
 def parse_jiwoncok_email(text: str, published_at: str | None = None) -> list[dict]:

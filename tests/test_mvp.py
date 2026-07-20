@@ -17,7 +17,10 @@ from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
-from tender_radar.jiwoncok import active_source_pages, discover_board_urls, parse_jiwoncok_email, parse_source_page
+from tender_radar.jiwoncok import (
+    active_source_pages, collect_recent_with_status, discover_board_urls,
+    parse_jiwoncok_email, parse_source_page,
+)
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
 from tender_radar.server import Handler, in_collect_window, in_digest_send_window, in_digest_window
 
@@ -287,13 +290,38 @@ class MVPTests(unittest.TestCase):
     def test_jiwoncok_defaults_to_small_core_source_set(self):
         with patch.dict("os.environ", {}, clear=True):
             rows = active_source_pages()
-        self.assertLessEqual(len(rows), 5)
+        self.assertLessEqual(len(rows), 8)
         self.assertIn("경기신용보증재단", {row["institution"] for row in rows})
+        self.assertIn("서울교통공사", {row["institution"] for row in rows})
 
     def test_jiwoncok_extended_mode_can_restore_full_source_set(self):
         with patch.dict("os.environ", {"JIWONCOK_SOURCE_MODE": "extended"}, clear=True):
             rows = active_source_pages()
         self.assertGreater(len(rows), 40)
+
+    def test_jiwoncok_source_failures_return_partial_status(self):
+        good = {"institution": "서울교통공사", "url": "https://good.example"}
+        bad = {"institution": "느린기관", "url": "https://bad.example"}
+
+        def fake_source(source):
+            if source["institution"] == "느린기관":
+                raise RuntimeError("timeout")
+            return [{
+                "source": "지원COK", "source_key": "good-1", "category": "평가위원 모집",
+                "title": "공법선정위원회 평가위원 모집", "institution": source["institution"],
+                "published_at": "2026-07-20", "deadline_at": "2026-07-21",
+                "estimated_price": None, "region": "", "notice_type": "신규",
+                "change_reason": "", "changed_at": "", "url": "https://good.example/1",
+                "score": 70, "matched_keywords": ["평가위원"], "raw": {},
+            }]
+
+        with patch("tender_radar.jiwoncok.active_source_pages", return_value=[good, bad]), patch(
+            "tender_radar.jiwoncok.collect_source_page", side_effect=fake_source
+        ):
+            rows, statuses = collect_recent_with_status()
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(any(status["ok"] for status in statuses))
+        self.assertTrue(any(not status["ok"] for status in statuses))
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({
