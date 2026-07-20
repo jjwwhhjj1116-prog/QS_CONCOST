@@ -4,11 +4,13 @@ import re
 import hashlib
 import html
 import os
+import ssl
 from concurrent.futures import TimeoutError, ThreadPoolExecutor, as_completed
 from datetime import datetime
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import unquote, urljoin
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .scoring import score_notice, should_keep_notice
@@ -23,6 +25,15 @@ WATCH_KEYWORDS = (
     "예비평가위원", "심사위원 모집", "위원 공개모집", "선정심의위원회",
     "공법선정위원회", "공법선정", "건축위원회", "건설기술심의",
     "기술입찰", "설계공모 심사", "정비사업", "도시계획위원회",
+    "공사비 검증", "공사비검증", "공사비 적정성", "개산견적", "실시견적",
+    "건축견적", "견적용역", "원가계산", "원가검토", "공사원가",
+    "물량산출", "수량산출", "내역서", "BOQ", "설계경제성", "VE",
+    "설계변경", "클레임", "계약금액 조정", "공사비 분쟁", "정산",
+    "물가변동", "물가상승", "에스컬레이션", "ES 검토", "ES 용역",
+    "정밀안전진단", "정밀안전점검", "안전진단", "구조안전",
+    "내진성능평가", "내진성능", "시설물 안전", "안전점검",
+    "재건축", "재개발", "가로주택정비", "소규모주택정비",
+    "FED 내역서", "BIM 산출", "구조 BIM",
 )
 BOARD_HINTS = (
     "고시", "공고", "공지", "알림", "입찰", "계약", "채용", "모집",
@@ -204,7 +215,17 @@ def _fetch(url: str) -> str:
         "User-Agent": "Mozilla/5.0 (compatible; CONCOST-JiwonCOK-Radar/1.0)",
         "Accept": "text/html,application/xhtml+xml",
     })
-    with urlopen(request, timeout=_fetch_timeout_seconds()) as response:
+    try:
+        response_context = urlopen(request, timeout=_fetch_timeout_seconds())
+    except URLError as exc:
+        if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
+            raise
+        response_context = urlopen(
+            request,
+            timeout=_fetch_timeout_seconds(),
+            context=ssl._create_unverified_context(),
+        )
+    with response_context as response:
         raw = response.read()
         charset = response.headers.get_content_charset() or "utf-8"
     candidates = [charset, "utf-8", "cp949", "euc-kr"]
@@ -246,6 +267,13 @@ def _has_watch_keyword(text: str) -> bool:
     return any(keyword.lower() in lowered for keyword in WATCH_KEYWORDS)
 
 
+def _category_for(title: str, matched: list[str]) -> str:
+    text = f"{title} {' '.join(matched)}"
+    if any(keyword in text for keyword in ("평가위원", "심사위원", "위원 공개모집", "공법선정", "건축위원회", "심의")):
+        return "평가위원 모집"
+    return "용역"
+
+
 def _has_board_hint(text: str) -> bool:
     lowered = text.lower()
     return any(hint.lower() in lowered for hint in BOARD_HINTS)
@@ -279,11 +307,11 @@ def parse_source_page(html_text: str, base_url: str, institution: str = "") -> l
         if dates:
             year, month, day = dates[-1]
             deadline = f"{year}-{int(month):02d}-{int(day):02d}"
-        score, matched = score_notice(title, institution, context, "평가위원 모집", SOURCE)
+        score, matched = score_notice(title, institution, context, SOURCE)
         rows.append({
             "source": SOURCE,
             "source_key": f"{institution or 'agency'}-{_source_key(target)}",
-            "category": "평가위원 모집",
+            "category": _category_for(title, matched),
             "title": title,
             "institution": institution,
             "published_at": today,
@@ -395,6 +423,7 @@ def _collect_source_status(source: dict[str, str]) -> dict[str, Any]:
             "source": source["institution"],
             "ok": True,
             "total": len(kept),
+            "candidates": len(rows),
             "filtered": len(rows) - len(kept),
             "rows": kept,
         }
@@ -403,6 +432,7 @@ def _collect_source_status(source: dict[str, str]) -> dict[str, Any]:
             "source": source.get("institution", "기관 미확인"),
             "ok": False,
             "total": 0,
+            "candidates": 0,
             "filtered": 0,
             "rows": [],
             "error": str(exc)[:240],
@@ -439,6 +469,7 @@ def collect_recent_with_status(lookback_hours: int = 48) -> tuple[list[dict[str,
                     "source": source.get("institution", "기관 미확인"),
                     "ok": False,
                     "total": 0,
+                    "candidates": 0,
                     "filtered": 0,
                     "rows": [],
                     "error": str(exc)[:240],
@@ -457,6 +488,7 @@ def collect_recent_with_status(lookback_hours: int = 48) -> tuple[list[dict[str,
                 "source": source.get("institution", "기관 미확인"),
                 "ok": False,
                 "total": 0,
+                "candidates": 0,
                 "filtered": 0,
                 "error": f"{int(timeout_seconds)}초 제한시간 초과",
             })

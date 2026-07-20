@@ -275,6 +275,20 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(rows[0]["deadline_at"], "2026-07-15")
         self.assertTrue(rows[0]["url"].startswith("https://www.example.go.kr/notice/"))
 
+    def test_parse_jiwoncok_source_page_includes_concost_service_keywords(self):
+        page = """
+        <table><tr><td>2026-07-20</td><td>
+        <a href="/notice/view.do?seq=880">서울 공동주택 정밀안전진단 및 공사비 검증 용역</a>
+        </td><td>접수기간 2026-07-20 ~ 2026-07-25</td></tr>
+        <tr><td><a href="/notice/view.do?seq=881">부산 공동주택 정밀안전진단 용역</a></td></tr></table>
+        """
+        rows = parse_source_page(page, "https://www.example.go.kr/notice/list.do", "")
+        kept = [row for row in rows if should_keep_notice(row)]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["category"], "용역")
+        self.assertGreaterEqual(kept[0]["score"], MIN_NOTICE_SCORE)
+
     def test_discover_jiwoncok_board_urls(self):
         page = """
         <a href="/intro">기관소개</a>
