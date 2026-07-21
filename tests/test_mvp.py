@@ -1,4 +1,5 @@
 import json
+import threading
 import tempfile
 import time
 import unittest
@@ -490,6 +491,70 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertTrue(any(status["ok"] for status in statuses))
         self.assertTrue(any(not status["ok"] for status in statuses))
+
+    def test_jiwoncok_core_sources_start_in_parallel(self):
+        sources = [
+            {"institution": f"기관-{index}", "url": f"https://example{index}.go.kr"}
+            for index in range(8)
+        ]
+        barrier = threading.Barrier(8, timeout=2)
+
+        def fake_source(_source):
+            barrier.wait()
+            return []
+
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "tender_radar.jiwoncok.active_source_pages", return_value=sources
+        ), patch("tender_radar.jiwoncok.collect_source_page", side_effect=fake_source):
+            rows, statuses = collect_recent_with_status()
+        self.assertEqual(rows, [])
+        self.assertEqual(len(statuses), 8)
+        self.assertTrue(all(status["ok"] for status in statuses))
+
+    def test_parse_jiwoncok_source_page_ignores_committee_menu_labels(self):
+        page = """
+        <nav><a href="/committee">경기도 건축위원회</a></nav>
+        <a href="/notice/100">건축위원회 위원 공개모집 공고</a><span>2026-07-21</span>
+        """
+        rows = parse_source_page(page, "https://www.gg.go.kr/", "경기도")
+        self.assertEqual(len(rows), 1)
+        self.assertIn("공개모집", rows[0]["title"])
+
+    def test_parse_jiwoncok_source_page_prefers_date_inside_list_link(self):
+        page = """
+        <a href="/notice/200">정산 용역 제안서 평가위원 후보자 모집 2026-07-07</a>
+        <span>다음 게시물 2026-07-21</span>
+        """
+        rows = parse_source_page(page, "https://example.go.kr/", "서울특별시")
+        self.assertEqual(rows[0]["published_at"], "2026-07-07")
+        self.assertNotIn("2026-07-07", rows[0]["title"])
+
+    def test_jiwoncok_fetch_keeps_received_html_when_server_does_not_close(self):
+        from tender_radar.jiwoncok import _fetch
+
+        class Headers:
+            @staticmethod
+            def get_content_charset():
+                return "utf-8"
+
+        class Response:
+            headers = Headers()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self, _size):
+                if not hasattr(self, "sent"):
+                    self.sent = True
+                    return "<a href='/notice'>공사비 검증 용역</a>".encode()
+                raise TimeoutError("keep-alive")
+
+        with patch("tender_radar.jiwoncok.urlopen", return_value=Response()):
+            page = _fetch("https://example.go.kr")
+        self.assertIn("공사비 검증 용역", page)
 
     def test_normalize_g2b_item(self):
         notice = normalize_item({

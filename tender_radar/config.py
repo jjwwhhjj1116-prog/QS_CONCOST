@@ -37,7 +37,10 @@ def get_settings() -> Settings:
         db_path = ROOT / db_path
     return Settings(
         service_key=os.getenv("DATA_GO_KR_SERVICE_KEY", "").strip(),
-        lookback_hours=int(os.getenv("LOOKBACK_HOURS", "48")),
+        # A week is still a small API window after the >=40 relevance filter,
+        # and it lets an ephemeral/free deployment rebuild a useful dashboard
+        # instead of showing only a handful of notices after every restart.
+        lookback_hours=int(os.getenv("LOOKBACK_HOURS", "168")),
         db_path=db_path,
         host=os.getenv("HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "8765")),

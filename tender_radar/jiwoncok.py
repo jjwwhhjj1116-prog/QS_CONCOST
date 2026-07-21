@@ -41,7 +41,7 @@ CONSTRUCTION_CONTEXT_TERMS = (
     "물량", "수량", "구조", "공동주택", "사업비", "정비사업",
 )
 EXCLUDED_TITLE_TERMS = (
-    "모집 결과", "선정 결과", "선정결과", "심사 결과", "평가 결과",
+    "모집 결과", "선정 결과", "선정결과", "심사 결과", "평가 결과", "평가결과",
     "합격자", "채용", "교육생", "수강생",
 )
 BOARD_HINTS = (
@@ -53,8 +53,8 @@ BOARD_HINTS = (
 # 1차 MVP 소스. 지원콕 공개 목록/알림메일에서 반복 등장한 기관을 시작점으로 두고,
 # 정확한 게시판 URL을 아는 곳은 URL을 직접, 모르는 곳은 홈페이지에서 게시판 후보를 찾아 들어간다.
 SOURCE_PAGES = (
-    {"institution": "부산광역시", "url": "https://www.busan.go.kr/nbgosi"},
-    {"institution": "서울교통공사", "url": "https://www.seoulmetro.co.kr/kr/board.do?menuIdx=546"},
+    {"institution": "부산광역시", "url": "https://www.busan.go.kr/nbgosi", "direct": "1"},
+    {"institution": "서울교통공사", "url": "https://www.seoulmetro.co.kr/kr/board.do?menuIdx=546", "direct": "1"},
     {"institution": "창원시", "url": "https://www.changwon.go.kr/cwportal/10310/10438/10439.web"},
     {"institution": "김해시", "url": "https://www.gimhae.go.kr/03360/00023/00024.web"},
     {"institution": "구미시", "url": "https://www.gumi.go.kr/portal/saeol/gosi/list.do"},
@@ -82,7 +82,7 @@ SOURCE_PAGES = (
     {"institution": "강서구시설관리공단", "url": "https://www.gssi.or.kr/"},
     {"institution": "경기도수원월드컵경기장관리재단", "url": "https://www.suwonworldcup.or.kr/"},
     {"institution": "전라남도정보문화산업진흥원", "url": "https://www.jcia.or.kr/"},
-    {"institution": "경기주택도시공사", "url": "https://www.gh.or.kr/"},
+    {"institution": "경기주택도시공사", "url": "https://www.gh.or.kr/gh/bid-relations.do?article.offset=0&mode=list", "direct": "1"},
     {"institution": "부산광역시 부산진구", "url": "https://www.busanjin.go.kr/"},
     {"institution": "화성시체육회", "url": "https://www.hssports.or.kr/"},
     {"institution": "제주특별자치도교육청", "url": "https://www.jje.go.kr/"},
@@ -95,7 +95,7 @@ SOURCE_PAGES = (
     {"institution": "진주문화관광재단", "url": "https://www.jjct.or.kr/"},
     {"institution": "철원군", "url": "https://www.cwg.go.kr/"},
     {"institution": "강원특별자치도 소방본부", "url": "https://fire.gwd.go.kr/"},
-    {"institution": "구로구", "url": "https://www.guro.go.kr/"},
+    {"institution": "구로구", "url": "https://www.guro.go.kr/www/selectBbsNttList.do?bbsNo=663&key=1791&pageIndex=1&pageUnit=20", "direct": "1"},
     {"institution": "완도군", "url": "https://www.wando.go.kr/"},
     {"institution": "고흥군", "url": "https://www.goheung.go.kr/"},
     {"institution": "충청남도", "url": "https://www.chungnam.go.kr/"},
@@ -131,7 +131,7 @@ SOURCE_PAGES = (
     {"institution": "광주인재평생교육진흥원", "url": "https://www.gie.kr/"},
     {"institution": "정읍시", "url": "https://www.jeongeup.go.kr/"},
     {"institution": "고양시 일산동구", "url": "https://www.goyang.go.kr/ilsandong/"},
-    {"institution": "서울특별시 동대문구", "url": "https://www.ddm.go.kr/"},
+    {"institution": "서울특별시 동대문구", "url": "https://www.ddm.go.kr/www/selectEminwonWebList.do?key=3291&pageIndex=1&pageUnit=20&searchCnd=all", "direct": "1"},
     {"institution": "화성시복지재단", "url": "https://www.hswf.or.kr/"},
 )
 
@@ -235,7 +235,25 @@ def _fetch(url: str) -> str:
             context=ssl._create_unverified_context(),
         )
     with response_context as response:
-        raw = response.read()
+        # Several municipal boards send the complete HTML but keep the HTTP/1.1
+        # connection open without a usable Content-Length. response.read()
+        # waits for EOF and then discards the already received page on timeout.
+        # Preserve complete chunks and parse the partial page once the peer goes
+        # quiet; list rows and their links are near the beginning of these pages.
+        chunks: list[bytes] = []
+        received = 0
+        while received < 2_000_000:
+            try:
+                chunk = response.read(min(65_536, 2_000_000 - received))
+            except TimeoutError:
+                if chunks:
+                    break
+                raise
+            if not chunk:
+                break
+            chunks.append(chunk)
+            received += len(chunk)
+        raw = b"".join(chunks)
         charset = response.headers.get_content_charset() or "utf-8"
     candidates = [charset, "utf-8", "cp949", "euc-kr"]
     decoded: list[tuple[int, str]] = []
@@ -274,6 +292,15 @@ def _source_key(url: str) -> str:
 def _has_watch_keyword(text: str) -> bool:
     lowered = text.lower()
     if any(term.lower() in lowered for term in EXCLUDED_TITLE_TERMS):
+        return False
+    # Menu entries such as "건축위원회" or "도시계획위원회" contain a
+    # scoring keyword but are not notices. Require an opportunity/action word
+    # before treating a short committee label as a collectible announcement.
+    action_terms = (
+        "모집", "공고", "용역", "입찰", "선정", "후보", "검증", "진단",
+        "점검", "정산", "클레임", "공사비", "견적", "산출", "물가",
+    )
+    if len(_clean(text)) <= 30 and "위원회" in lowered and not any(term in lowered for term in action_terms):
         return False
     broad = {keyword.lower() for keyword in BROAD_WATCH_KEYWORDS}
     if any(keyword.lower() in lowered for keyword in WATCH_KEYWORDS if keyword.lower() not in broad):
@@ -319,7 +346,12 @@ def parse_source_page(html_text: str, base_url: str, institution: str = "") -> l
         if target in seen or not _has_watch_keyword(title):
             continue
         seen.add(target)
-        dates = DATE_RE.findall(context)
+        # Some board templates wrap the row date inside the anchor. Prefer that
+        # date over neighboring rows and remove it from the displayed title.
+        title_dates = DATE_RE.findall(title)
+        dates = title_dates or DATE_RE.findall(context)
+        if title_dates:
+            title = _clean(DATE_RE.sub("", title))
         published_at = today
         deadline = ""
         if dates:
@@ -420,7 +452,13 @@ def collect_source_page(source: dict[str, str]) -> list[dict[str, Any]]:
         board_limit = max(0, min(int(os.getenv("JIWONCOK_BOARD_LIMIT", "1")), 3))
     except ValueError:
         board_limit = 1
-    urls = [source["url"], *discover_board_urls(root, source["url"], limit=board_limit)]
+    # Known list pages are parsed directly. Re-discovering a board from an
+    # already-correct list wastes another network round trip and was the main
+    # reason the core-source batch exhausted its shared deadline.
+    discovered = [] if source.get("direct") == "1" else discover_board_urls(
+        root, source["url"], limit=board_limit
+    )
+    urls = [source["url"], *discovered]
     result: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     for url in urls:
@@ -469,14 +507,17 @@ def collect_recent_with_status(lookback_hours: int = 48) -> tuple[list[dict[str,
     if not sources:
         return [], []
     try:
-        configured_workers = int(os.getenv("JIWONCOK_MAX_WORKERS", "3"))
+        configured_workers = int(os.getenv("JIWONCOK_MAX_WORKERS", "8"))
     except ValueError:
-        configured_workers = 3
-    max_workers = max(1, min(configured_workers, len(sources), 4))
+        configured_workers = 8
+    # Each institution is an independent source. Running all eight core
+    # sources concurrently prevents early sites from consuming the entire
+    # shared deadline while later institutions never get a chance to start.
+    max_workers = max(1, min(configured_workers, len(sources), 8))
     try:
-        timeout_seconds = max(4.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "8")), 15.0))
+        timeout_seconds = max(6.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "16")), 25.0))
     except ValueError:
-        timeout_seconds = 8.0
+        timeout_seconds = 16.0
     pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jiwoncok-source")
     futures = {pool.submit(_collect_source_status, source, cutoff_date): source for source in sources}
     statuses: list[dict[str, Any]] = []
