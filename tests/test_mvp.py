@@ -32,9 +32,9 @@ from tender_radar.server import (
 
 
 class MVPTests(unittest.TestCase):
-    def test_render_enables_startup_collection_without_extra_setting(self):
+    def test_render_does_not_start_a_duplicate_collector(self):
         with patch.dict("os.environ", {"RENDER": "true"}, clear=True):
-            self.assertTrue(auto_collect_on_start_enabled())
+            self.assertFalse(auto_collect_on_start_enabled())
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "false"}, clear=True):
             self.assertFalse(auto_collect_on_start_enabled())
 

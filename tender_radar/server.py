@@ -96,9 +96,10 @@ def auto_collect_on_start_enabled() -> bool:
     configured = os.getenv("AUTO_COLLECT_ON_START", "").strip().lower()
     if configured:
         return configured in {"1", "true", "yes"}
-    # Render sets RENDER=true automatically. Existing Blueprint services do not
-    # always apply newly added render.yaml variables on a source-only deploy.
-    return os.getenv("RENDER", "").strip().lower() == "true"
+    # Production collection is triggered once by GitHub Actions. Starting a
+    # second collector on every Render deploy/restart causes 409/503 collisions
+    # and can leave the free instance too busy to answer the scheduled request.
+    return False
 
 
 def internal_scheduler_enabled() -> bool:
@@ -722,6 +723,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/admin/collect-jiwoncok":
             if not self._require_admin():
                 return
+            if not self.collection_lock.acquire(blocking=False):
+                self._json({"error": "전체 자료수집이 진행 중입니다. 완료 후 다시 실행하세요."}, 409)
+                return
             try:
                 payload = self._read_json()
                 lookback_hours = max(1, min(int(payload.get("lookback_hours", 48)), 168))
@@ -741,6 +745,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             except Exception as exc:
                 self._json({"error": str(exc)}, 502)
+            finally:
+                self.collection_lock.release()
             return
         if parsed.path == "/api/admin/import-jiwoncok":
             if not self._require_admin():
