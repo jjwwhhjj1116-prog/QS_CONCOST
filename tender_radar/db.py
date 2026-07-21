@@ -264,7 +264,11 @@ def set_setting(db_path: Path, key: str, value: str, only_if_missing: bool = Fal
 
 
 def upsert_notice(db_path: Path, notice: dict[str, Any]) -> str:
-    init_db(db_path)
+    # CLI and web-server entry points initialize the schema once before
+    # collection. Re-running init_db for every row also recalculates the admin
+    # password hash, making a one-week refresh take minutes instead of seconds.
+    if not db_path.exists() or db_path.stat().st_size == 0:
+        init_db(db_path)
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     raw_json = json.dumps(notice.get("raw", {}), ensure_ascii=False, sort_keys=True)
     digest_source = json.dumps(
@@ -318,7 +322,10 @@ def upsert_notice(db_path: Path, notice: dict[str, Any]) -> str:
 
 
 def upsert_news(db_path: Path, item: dict[str, Any]) -> str:
-    init_db(db_path)
+    # The database is initialized once by the caller; avoid row-by-row schema
+    # and bootstrap work during a digest refresh.
+    if not db_path.exists() or db_path.stat().st_size == 0:
+        init_db(db_path)
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     with connect(db_path) as conn:
         existing = conn.execute(
