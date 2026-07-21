@@ -48,29 +48,3 @@ services:
       name: qs-concost-data
       mountPath: /var/data
       sizeGB: 1
-  - type: cron
-    name: qs-concost-daily-collect
-    runtime: docker
-    plan: starter
-    schedule: "0 0 * * 1-5"
-    dockerCommand: python -m tender_radar.automation_client collect
-    envVars:
-      - key: QS_CONCOST_URL
-        value: https://qs-concost.onrender.com
-      - key: DIGEST_TRIGGER_TOKEN
-        sync: false
-  - type: cron
-    name: qs-concost-daily-digest
-    runtime: docker
-    plan: starter
-    schedule: "0 1 * * 1-5"
-    dockerCommand: python -m tender_radar.automation_client digest
-    envVars:
-      - key: QS_CONCOST_URL
-        value: https://qs-concost.onrender.com
-      - key: RESEND_API_KEY
-        sync: false
-      - key: DIGEST_FROM_EMAIL
-        sync: false
-      - key: DIGEST_RECIPIENTS
-        sync: false
