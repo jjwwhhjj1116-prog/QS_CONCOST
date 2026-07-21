@@ -427,7 +427,9 @@ class Handler(BaseHTTPRequestHandler):
             ))
             return
         if parsed.path == "/api/stats":
-            self._json(stats(self.settings.db_path))
+            summary = stats(self.settings.db_path)
+            summary["app_version"] = os.getenv("RENDER_GIT_COMMIT", "local")[:7]
+            self._json(summary)
             return
         if parsed.path == "/api/news":
             params = parse_qs(parsed.query)

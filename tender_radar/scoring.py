@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 SCORING_VERSION = "concost-consulting-v4"
 MIN_NOTICE_SCORE = 40
 
@@ -82,8 +84,16 @@ SEOUL_TERMS = (
 
 
 def _best_match(text: str, keywords: dict[str, int]) -> tuple[str, int] | None:
-    matches = ((keyword, weight) for keyword, weight in keywords.items() if keyword.lower() in text)
+    matches = ((keyword, weight) for keyword, weight in keywords.items() if _has_keyword(text, keyword))
     return max(matches, key=lambda item: (item[1], len(item[0])), default=None)
+
+
+def _has_keyword(text: str, keyword: str) -> bool:
+    """Match Latin abbreviations as words so VE does not match 'waiver'."""
+    lowered = keyword.lower()
+    if re.search(r"[a-z0-9]", lowered):
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(lowered)}(?![a-z0-9])", text))
+    return lowered in text
 
 
 def score_notice(*parts: object) -> tuple[int, list[str]]:

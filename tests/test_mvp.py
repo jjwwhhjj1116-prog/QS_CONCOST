@@ -140,6 +140,13 @@ class MVPTests(unittest.TestCase):
         self.assertGreaterEqual(score, 70)
         self.assertTrue(any("공사비" in item for item in matched))
 
+    def test_english_abbreviation_does_not_match_inside_unrelated_word(self):
+        score, matched = score_notice(
+            "테라헤르츠 이미지센서 ROIC의 DRC Waiver 적합성 검토 및 제조 전 설계검증 연구용역"
+        )
+        self.assertLess(score, MIN_NOTICE_SCORE)
+        self.assertFalse(any("(VE)" in item for item in matched))
+
     def test_g2b_retries_one_transient_read_timeout(self):
         class Response:
             def __enter__(self):
