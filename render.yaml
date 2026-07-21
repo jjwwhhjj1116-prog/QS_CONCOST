@@ -17,7 +17,7 @@ services:
       # The free web instance can restart with an empty local SQLite volume.
       # Rebuilding a full week keeps the opportunity screen useful after a restart.
       - key: LOOKBACK_HOURS
-        value: "168"
+        value: "72"
       - key: JIWONCOK_MAX_WORKERS
         value: "8"
       - key: JIWONCOK_TIMEOUT_SECONDS

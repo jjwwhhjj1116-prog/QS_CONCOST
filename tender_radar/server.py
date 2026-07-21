@@ -93,12 +93,14 @@ def storage_is_persistent(db_path: Path) -> bool:
 
 
 def auto_collect_on_start_enabled() -> bool:
+    # Existing Render services can retain an old AUTO_COLLECT_ON_START=true
+    # value even after render.yaml changes. Production must have exactly one
+    # collector (the GitHub 09:00 workflow), so ignore the stale value there.
+    if os.getenv("RENDER", "").strip().lower() == "true":
+        return False
     configured = os.getenv("AUTO_COLLECT_ON_START", "").strip().lower()
     if configured:
         return configured in {"1", "true", "yes"}
-    # Production collection is triggered once by GitHub Actions. Starting a
-    # second collector on every Render deploy/restart causes 409/503 collisions
-    # and can leave the free instance too busy to answer the scheduled request.
     return False
 
 
