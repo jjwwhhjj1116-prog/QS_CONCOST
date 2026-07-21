@@ -93,8 +93,14 @@ class MVPTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
             "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
         ), patch("tender_radar.server.is_kst_weekday", return_value=True), patch(
+            "tender_radar.server.Handler._create_collection_job", return_value="scheduled-job"
+        ), patch(
+            "tender_radar.server.Handler._run_collection_job"
+        ) as collect_mock, patch(
+            "tender_radar.server.Handler._get_collection_job", return_value={"ok": True, "status": "complete"}
+        ), patch(
             "tender_radar.cli.collect", return_value=0
-        ) as collect_mock:
+        ):
             db = Path(tmp) / "test.db"
             init_db(db)
             settings = Settings("", 48, db, "127.0.0.1", 0)

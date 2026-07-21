@@ -610,15 +610,43 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "이미 수집 작업이 진행 중입니다."}, 409)
                 return
             try:
-                from .cli import collect
-                result = collect()
-                if result == 0:
+                service_key = get_secret(
+                    self.settings.db_path,
+                    "public_data_api_key",
+                    self.settings.service_key,
+                )
+                law_key = get_secret(self.settings.db_path, "law_api_oc")
+                job_id = type(self)._create_collection_job("09:00 예약 자료 수집을 시작했습니다.")
+                # Use the same bounded, per-source collector as the admin UI.
+                # The legacy CLI path could wait indefinitely on one upstream
+                # site and therefore left the workflow running for tens of
+                # minutes without saving results from healthy sources.
+                self._run_collection_job(
+                    job_id,
+                    service_key,
+                    law_key,
+                    self.settings.lookback_hours,
+                )
+                job = self._get_collection_job(job_id) or {}
+                if job.get("ok"):
                     set_setting(self.settings.db_path, "last_scheduled_collect", now_kst.date().isoformat())
-                self._json({"ok": result == 0, "collected": True}, 200 if result == 0 else 502)
+                self._json({
+                    "ok": bool(job.get("ok")),
+                    "collected": True,
+                    "job_id": job_id,
+                    "job": job,
+                }, 200 if job.get("ok") else 502)
             except Exception as exc:
                 self._json({"error": str(exc)}, 502)
             finally:
-                self.collection_lock.release()
+                # _run_collection_job normally releases the owned lock. This
+                # fallback covers configuration/startup failures before it ran.
+                if self.collection_lock.locked():
+                    type(self).collection_lock_owner = None
+                    try:
+                        self.collection_lock.release()
+                    except RuntimeError:
+                        pass
             return
         if parsed.path == "/api/automation/digest":
             if get_setting(self.settings.db_path, "digest_enabled", "1") != "1":
