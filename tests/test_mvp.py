@@ -95,8 +95,8 @@ class MVPTests(unittest.TestCase):
         ), patch("tender_radar.server.is_kst_weekday", return_value=True), patch(
             "tender_radar.server.Handler._create_collection_job", return_value="scheduled-job"
         ), patch(
-            "tender_radar.server.Handler._run_collection_job"
-        ) as collect_mock, patch(
+            "tender_radar.server.threading.Thread"
+        ) as thread_mock, patch(
             "tender_radar.server.Handler._get_collection_job", return_value={"ok": True, "status": "complete"}
         ), patch(
             "tender_radar.cli.collect", return_value=0
@@ -116,7 +116,11 @@ class MVPTests(unittest.TestCase):
             collect_handler._json = lambda payload, status=200: collect_responses.append((payload, status))
             collect_handler.do_POST()
             self.assertTrue(collect_responses[0][0]["ok"])
-            collect_mock.assert_called_once()
+            self.assertEqual(collect_responses[0][1], 202)
+            thread_mock.return_value.start.assert_called_once()
+            Handler.collection_lock_owner = None
+            if Handler.collection_lock.locked():
+                Handler.collection_lock.release()
 
             digest_responses = []
             digest_handler = object.__new__(Handler)

@@ -409,6 +409,20 @@ class Handler(BaseHTTPRequestHandler):
                 except RuntimeError:
                     pass
 
+    def _run_scheduled_collection_job(
+        self,
+        job_id: str,
+        service_key: str,
+        law_key: str,
+        lookback_hours: int,
+        scheduled_date: str,
+    ) -> None:
+        """Run one bounded sweep without holding the automation request open."""
+        self._run_collection_job(job_id, service_key, law_key, lookback_hours)
+        job = self._get_collection_job(job_id) or {}
+        if job.get("ok"):
+            set_setting(self.settings.db_path, "last_scheduled_collect", scheduled_date)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/notices":
@@ -609,7 +623,13 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return
             if not self.collection_lock.acquire(blocking=False):
-                self._json({"error": "이미 수집 작업이 진행 중입니다."}, 409)
+                running = self._latest_running_collection_job()
+                self._json({
+                    "ok": True,
+                    "already_running": True,
+                    "job_id": (running or {}).get("id", ""),
+                    "job": running or {},
+                }, 409)
                 return
             try:
                 service_key = get_secret(
@@ -619,36 +639,32 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 law_key = get_secret(self.settings.db_path, "law_api_oc")
                 job_id = type(self)._create_collection_job("09:00 예약 자료 수집을 시작했습니다.")
-                # Use the same bounded, per-source collector as the admin UI.
-                # The legacy CLI path could wait indefinitely on one upstream
-                # site and therefore left the workflow running for tens of
-                # minutes without saving results from healthy sources.
-                self._run_collection_job(
-                    job_id,
-                    service_key,
-                    law_key,
-                    self.settings.lookback_hours,
+                worker = threading.Thread(
+                    target=self._run_scheduled_collection_job,
+                    args=(
+                        job_id,
+                        service_key,
+                        law_key,
+                        self.settings.lookback_hours,
+                        now_kst.date().isoformat(),
+                    ),
+                    name=f"scheduled-collection-{job_id}",
+                    daemon=True,
                 )
-                job = self._get_collection_job(job_id) or {}
-                if job.get("ok"):
-                    set_setting(self.settings.db_path, "last_scheduled_collect", now_kst.date().isoformat())
+                worker.start()
                 self._json({
-                    "ok": bool(job.get("ok")),
-                    "collected": True,
+                    "ok": True,
+                    "accepted": True,
                     "job_id": job_id,
-                    "job": job,
-                }, 200 if job.get("ok") else 502)
+                    "job": self._get_collection_job(job_id),
+                }, 202)
             except Exception as exc:
+                type(self).collection_lock_owner = None
+                try:
+                    self.collection_lock.release()
+                except RuntimeError:
+                    pass
                 self._json({"error": str(exc)}, 502)
-            finally:
-                # _run_collection_job normally releases the owned lock. This
-                # fallback covers configuration/startup failures before it ran.
-                if self.collection_lock.locked():
-                    type(self).collection_lock_owner = None
-                    try:
-                        self.collection_lock.release()
-                    except RuntimeError:
-                        pass
             return
         if parsed.path == "/api/automation/digest":
             if get_setting(self.settings.db_path, "digest_enabled", "1") != "1":
