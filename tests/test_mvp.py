@@ -88,6 +88,46 @@ class MVPTests(unittest.TestCase):
                 Handler.sessions = {}
             self.assertEqual(handler._admin_username(), "concost")
 
+    def test_scheduled_automation_runs_without_admin_session(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
+        ), patch("tender_radar.server.is_kst_weekday", return_value=True), patch(
+            "tender_radar.cli.collect", return_value=0
+        ) as collect_mock:
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            settings = Settings("", 48, db, "127.0.0.1", 0)
+
+            collect_responses = []
+            collect_handler = object.__new__(Handler)
+            collect_handler.settings = settings
+            collect_handler.path = "/api/automation/collect"
+            collect_handler.headers = {
+                "Authorization": "Bearer automation-token",
+                "X-Collect-Scheduled": "true",
+            }
+            collect_handler._json = lambda payload, status=200: collect_responses.append((payload, status))
+            collect_handler.do_POST()
+            self.assertTrue(collect_responses[0][0]["ok"])
+            collect_mock.assert_called_once()
+
+            digest_responses = []
+            digest_handler = object.__new__(Handler)
+            digest_handler.settings = settings
+            digest_handler.path = "/api/automation/digest"
+            digest_handler.headers = {
+                "Authorization": "Bearer automation-token",
+                "X-Digest-Scheduled": "true",
+                "X-Resend-Api-Key": "re_test",
+                "X-Digest-From-Email": "CONCOST <news@con-cost.co.kr>",
+                "X-Digest-Recipients": "team@con-cost.co.kr",
+            }
+            digest_handler._json = lambda payload, status=200: digest_responses.append((payload, status))
+            with patch("tender_radar.server.send_email_digest", return_value={"ok": True}) as send_mock:
+                digest_handler.do_POST()
+            self.assertTrue(digest_responses[0][0]["ok"])
+            self.assertTrue(send_mock.call_args.kwargs["idempotency_key"].startswith("concost-daily-digest-"))
+
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
         self.assertGreaterEqual(score, 70)

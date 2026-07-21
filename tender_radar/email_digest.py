@@ -219,6 +219,7 @@ def send_email_digest(
     api_key_override: str = "",
     from_email_override: str = "",
     recipients_override: list[str] | None = None,
+    idempotency_key: str = "",
 ) -> dict:
     digest = build_email_digest(db_path, website_url)
     recipients = recipients_override or [x["email"] for x in list_digest_recipients(db_path) if x["is_active"]]
@@ -245,11 +246,6 @@ def send_email_digest(
         "from": from_email, "to": recipients, "subject": digest["subject"],
         "html": digest["html"], "text": digest["text"],
     }, ensure_ascii=False).encode("utf-8")
-    # Render Cron, GitHub Actions retry, or a server restart can trigger the same
-    # daily digest more than once. Resend retains this key for 24 hours, so the
-    # same KST-date digest is delivered only once even if local DB state resets.
-    digest_date = datetime.now(SEOUL).date().isoformat()
-    idempotency_key = f"concost-daily-digest-{digest_date}"
     request = build_resend_request(api_key, payload, idempotency_key=idempotency_key)
     try:
         with urlopen(request, timeout=30) as response:

@@ -597,10 +597,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
         if parsed.path == "/api/automation/collect":
             now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
-            if self.headers.get("X-Collect-Scheduled", "").strip().lower() == "true" and not in_collect_window(now_kst):
+            if self.headers.get("X-Collect-Scheduled", "").strip().lower() == "true" and not is_kst_weekday(now_kst):
                 self._json({
                     "ok": True, "skipped": True,
-                    "reason": f"예약 수집 실행이 지연되어 실행하지 않았습니다. 현재 한국시간 {now_kst:%H:%M}",
+                    "reason": f"주말 예약 수집은 실행하지 않습니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
                 })
                 return
             if not self.collection_lock.acquire(blocking=False):
@@ -622,10 +622,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "skipped": True, "reason": "예약 발송 꺼짐"})
                 return
             now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
-            if self.headers.get("X-Digest-Scheduled", "").strip().lower() == "true" and not in_digest_send_window(now_kst):
+            if self.headers.get("X-Digest-Scheduled", "").strip().lower() == "true" and not is_kst_weekday(now_kst):
                 self._json({
                     "ok": True, "skipped": True,
-                    "reason": f"예약 실행이 지연되어 발송하지 않았습니다. 현재 한국시간 {now_kst:%H:%M}",
+                    "reason": f"주말 예약 메일은 발송하지 않습니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
                 })
                 return
             today = now_kst.date().isoformat()
@@ -659,6 +659,7 @@ class Handler(BaseHTTPRequestHandler):
                     api_key_override=self.headers.get("X-Resend-Api-Key", "").strip(),
                     from_email_override=self.headers.get("X-Digest-From-Email", "").strip(),
                     recipients_override=recipients or None,
+                    idempotency_key=f"concost-daily-digest-{today}",
                 )
                 set_setting(self.settings.db_path, "last_automation_digest", today)
                 self._json(result)
@@ -1008,7 +1009,10 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                     enabled = get_setting(settings.db_path, "digest_enabled", "1") == "1"
                     if enabled and last != today and Handler.digest_lock.acquire(blocking=False):
                         try:
-                            send_email_digest(settings.db_path)
+                            send_email_digest(
+                                settings.db_path,
+                                idempotency_key=f"concost-daily-digest-{today}",
+                            )
                             set_setting(settings.db_path, "last_automation_digest", today)
                         except Exception as exc:
                             print(f"10:00 예약메일 실패: {exc}")
