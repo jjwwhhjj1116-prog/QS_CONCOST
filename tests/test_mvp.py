@@ -112,12 +112,14 @@ class MVPTests(unittest.TestCase):
             collect_handler.headers = {
                 "Authorization": "Bearer automation-token",
                 "X-Collect-Scheduled": "true",
+                "X-Collect-Scopes": "g2b,jiwoncok",
             }
             collect_handler._json = lambda payload, status=200: collect_responses.append((payload, status))
             collect_handler.do_POST()
             self.assertTrue(collect_responses[0][0]["ok"])
             self.assertEqual(collect_responses[0][1], 202)
             thread_mock.return_value.start.assert_called_once()
+            self.assertEqual(thread_mock.call_args.kwargs["args"][-1], {"g2b", "jiwoncok"})
             Handler.collection_lock_owner = None
             if Handler.collection_lock.locked():
                 Handler.collection_lock.release()

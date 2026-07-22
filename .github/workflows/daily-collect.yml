@@ -22,11 +22,27 @@ jobs:
           SCHEDULED_RUN: ${{ github.event_name == 'schedule' }}
         run: |
           test -n "$DIGEST_TRIGGER_TOKEN"
+          collect_scopes=""
+          if [ "$SCHEDULED_RUN" = "true" ]; then
+            minute=$((10#$(TZ=Asia/Seoul date +%M)))
+            slot=$((minute / 10 * 10))
+            case "$slot" in
+              0)  collect_scopes="g2b,lh" ;;
+              10) collect_scopes="g2b,kapt" ;;
+              20) collect_scopes="g2b,jiwoncok" ;;
+              30) collect_scopes="g2b,expressway" ;;
+              40) collect_scopes="g2b,content" ;;
+              50) collect_scopes="g2b,jiwoncok" ;;
+              *)  collect_scopes="g2b" ;;
+            esac
+          fi
+          echo "Collection scopes: ${collect_scopes:-all}"
           http_code=$(curl --silent --show-error --max-time 90 \
             --output /tmp/collect-response.json --write-out "%{http_code}" \
             -X POST \
             -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN" \
             -H "X-Collect-Scheduled: $SCHEDULED_RUN" \
+            -H "X-Collect-Scopes: $collect_scopes" \
             https://qs-concost.onrender.com/api/automation/collect)
           cat /tmp/collect-response.json
           if [ "$http_code" != "200" ] && [ "$http_code" != "202" ] && [ "$http_code" != "409" ]; then

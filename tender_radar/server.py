@@ -293,7 +293,14 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         return snapshot
 
-    def _run_collection_job(self, job_id: str, service_key: str, law_key: str, lookback_hours: int) -> None:
+    def _run_collection_job(
+        self,
+        job_id: str,
+        service_key: str,
+        law_key: str,
+        lookback_hours: int,
+        scopes: set[str] | None = None,
+    ) -> None:
         def save_notices(rows: list[dict]) -> dict[str, int]:
             counts = {"inserted": 0, "updated": 0, "unchanged": 0}
             for notice in rows:
@@ -309,19 +316,30 @@ class Handler(BaseHTTPRequestHandler):
             return counts
 
         notice_jobs = (
-            ("나라장터", lambda: g2b.collect_recent(service_key, lookback_hours)),
-            ("LH", lambda: lh.collect_recent(service_key, lookback_hours)),
-            ("도로공사", lambda: expressway.collect_recent(lookback_hours)),
-            ("공동주택관리정보시스템", lambda: kapt.collect_recent(lookback_hours)),
-            ("지원COK", lambda: jiwoncok.collect_recent(lookback_hours)),
+            ("g2b", "나라장터", lambda: g2b.collect_recent(service_key, lookback_hours)),
+            ("lh", "LH", lambda: lh.collect_recent(service_key, lookback_hours)),
+            ("expressway", "도로공사", lambda: expressway.collect_recent(lookback_hours)),
+            ("kapt", "공동주택관리정보시스템", lambda: kapt.collect_recent(lookback_hours)),
+            ("jiwoncok", "지원COK", lambda: jiwoncok.collect_recent(lookback_hours)),
         )
-        news_jobs: list[tuple[str, object]] = [("공식 건설뉴스", official_news.collect_official_news)]
+        news_jobs: list[tuple[str, str, object]] = [
+            ("content", "공식 건설뉴스", official_news.collect_official_news)
+        ]
         if law_key:
-            news_jobs.append(("국가법령정보", lambda: law_news.collect_law_news(law_key)))
-        jobs = [("notice", source, collect) for source, collect in notice_jobs]
-        jobs.extend(("news", source, collect) for source, collect in news_jobs)
-        self._update_collection_job(job_id, source_total=len(jobs) + (0 if law_key else 1))
-        if not law_key:
+            news_jobs.append(("content", "국가법령정보", lambda: law_news.collect_law_news(law_key)))
+        jobs = [
+            ("notice", source, collect)
+            for scope, source, collect in notice_jobs
+            if scopes is None or scope in scopes
+        ]
+        jobs.extend(
+            ("news", source, collect)
+            for scope, source, collect in news_jobs
+            if scopes is None or scope in scopes
+        )
+        missing_law = not law_key and (scopes is None or "content" in scopes)
+        self._update_collection_job(job_id, source_total=len(jobs) + (1 if missing_law else 0))
+        if missing_law:
             self._append_collection_source(job_id, {
                 "source": "국가법령정보", "ok": False, "total": 0, "error": "API 인증값 미설정",
             })
@@ -416,9 +434,10 @@ class Handler(BaseHTTPRequestHandler):
         law_key: str,
         lookback_hours: int,
         scheduled_date: str,
+        scopes: set[str] | None = None,
     ) -> None:
         """Run one bounded sweep without holding the automation request open."""
-        self._run_collection_job(job_id, service_key, law_key, lookback_hours)
+        self._run_collection_job(job_id, service_key, law_key, lookback_hours, scopes)
         job = self._get_collection_job(job_id) or {}
         if job.get("ok"):
             set_setting(self.settings.db_path, "last_scheduled_collect", scheduled_date)
@@ -638,6 +657,13 @@ class Handler(BaseHTTPRequestHandler):
                     self.settings.service_key,
                 )
                 law_key = get_secret(self.settings.db_path, "law_api_oc")
+                allowed_scopes = {"g2b", "lh", "expressway", "kapt", "jiwoncok", "content"}
+                requested_scopes = {
+                    value.strip().lower()
+                    for value in self.headers.get("X-Collect-Scopes", "").split(",")
+                    if value.strip()
+                }
+                scopes = requested_scopes & allowed_scopes or None
                 job_id = type(self)._create_collection_job("09:00 예약 자료 수집을 시작했습니다.")
                 worker = threading.Thread(
                     target=self._run_scheduled_collection_job,
@@ -647,6 +673,7 @@ class Handler(BaseHTTPRequestHandler):
                         law_key,
                         self.settings.lookback_hours,
                         now_kst.date().isoformat(),
+                        scopes,
                     ),
                     name=f"scheduled-collection-{job_id}",
                     daemon=True,
