@@ -98,8 +98,6 @@ class MVPTests(unittest.TestCase):
             "tender_radar.server.threading.Thread"
         ) as thread_mock, patch(
             "tender_radar.server.Handler._get_collection_job", return_value={"ok": True, "status": "complete"}
-        ), patch(
-            "tender_radar.cli.collect", return_value=0
         ):
             db = Path(tmp) / "test.db"
             init_db(db)
@@ -136,10 +134,13 @@ class MVPTests(unittest.TestCase):
                 "X-Digest-Recipients": "team@con-cost.co.kr",
             }
             digest_handler._json = lambda payload, status=200: digest_responses.append((payload, status))
-            with patch("tender_radar.server.send_email_digest", return_value={"ok": True}) as send_mock:
+            with patch("tender_radar.server.send_email_digest", return_value={"ok": True}) as send_mock, patch(
+                "tender_radar.cli.collect"
+            ) as collect_mock:
                 digest_handler.do_POST()
             self.assertTrue(digest_responses[0][0]["ok"])
             self.assertTrue(send_mock.call_args.kwargs["idempotency_key"].startswith("concost-daily-digest-"))
+            collect_mock.assert_not_called()
 
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")

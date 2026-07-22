@@ -6,6 +6,11 @@ on:
     # GitHub cron uses UTC. 00:00~00:50 UTC = 09:00~09:50 Asia/Seoul.
     - cron: "0,10,20,30,40,50 0 * * 1-5"
   workflow_dispatch:
+    inputs:
+      scopes:
+        description: "Comma-separated collection scopes for a manual run"
+        required: false
+        default: "g2b"
 
 concurrency:
   group: concost-daily-collection
@@ -20,9 +25,10 @@ jobs:
         env:
           DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
           SCHEDULED_RUN: ${{ github.event_name == 'schedule' }}
+          MANUAL_SCOPES: ${{ inputs.scopes }}
         run: |
           test -n "$DIGEST_TRIGGER_TOKEN"
-          collect_scopes=""
+          collect_scopes="$MANUAL_SCOPES"
           if [ "$SCHEDULED_RUN" = "true" ]; then
             minute=$((10#$(TZ=Asia/Seoul date +%M)))
             slot=$((minute / 10 * 10))

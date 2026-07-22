@@ -712,19 +712,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "이미 발송 작업이 진행 중입니다."}, 409)
                 return
             try:
-                # Render 무료 웹서비스는 절전/재시작 시 로컬 SQLite가 초기화될 수 있다.
-                # 09시 수집 뒤 DB가 사라졌더라도 빈 메일을 보내지 않도록 10시 발송 직전에
-                # 당일 수집 이력을 확인하고 필요하면 자료를 다시 채운다.
-                last_collect = get_setting(self.settings.db_path, "last_scheduled_collect", "")
-                if last_collect != today or stats(self.settings.db_path).get("total", 0) == 0:
-                    if self.collection_lock.acquire(blocking=False):
-                        try:
-                            from .cli import collect
-                            collect_result = collect()
-                            if collect_result == 0:
-                                set_setting(self.settings.db_path, "last_scheduled_collect", today)
-                        finally:
-                            self.collection_lock.release()
+                # 메일 요청 경로에서는 자료 수집을 절대 동기 실행하지 않는다. 수집이 느리거나
+                # 원기관이 응답하지 않을 때 메일 발송까지 함께 멈추고 Render가 503이 되는 것을
+                # 막기 위해, 09시대에 저장된 현재 스냅샷만 즉시 발송한다.
                 recipients = [
                     email.strip().lower()
                     for email in self.headers.get("X-Digest-Recipients", "").split(",")

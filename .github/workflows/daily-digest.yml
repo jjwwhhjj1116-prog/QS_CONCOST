@@ -2,9 +2,11 @@ name: CONCOST weekday email digest
 
 on:
   schedule:
-    # Start before the busy top-of-hour slot, then wait until exactly 10:00 KST.
-    # GitHub cron uses UTC. 00:55 UTC = 09:55 Asia/Seoul.
+    # Start before 10:00 and retry afterward. The API and Resend idempotency key
+    # guarantee one delivery per KST date even when more than one trigger runs.
+    - cron: "50 0 * * 1-5"
     - cron: "55 0 * * 1-5"
+    - cron: "0,5,10 1 * * 1-5"
   workflow_dispatch:
 
 concurrency:
@@ -38,7 +40,7 @@ jobs:
             fi
           fi
           echo "Current KST: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
-          curl --fail --retry 5 --retry-all-errors --retry-delay 20 --max-time 540 \
+          curl --fail --retry 3 --retry-all-errors --retry-delay 15 --max-time 120 \
             -X POST \
             -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN" \
             -H "X-Resend-Api-Key: $RESEND_API_KEY" \
