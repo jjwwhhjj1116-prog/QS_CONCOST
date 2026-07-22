@@ -2,8 +2,9 @@ name: CONCOST weekday email digest
 
 on:
   schedule:
-    # GitHub cron uses UTC. 01:00 UTC = 10:00 Asia/Seoul.
-    - cron: "0 1 * * 1-5"
+    # Start before the busy top-of-hour slot, then wait until exactly 10:00 KST.
+    # GitHub cron uses UTC. 00:55 UTC = 09:55 Asia/Seoul.
+    - cron: "55 0 * * 1-5"
   workflow_dispatch:
 
 concurrency:
@@ -13,7 +14,7 @@ concurrency:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Trigger scheduled email digest
         env:
@@ -27,6 +28,15 @@ jobs:
           test -n "$RESEND_API_KEY"
           test -n "$DIGEST_FROM_EMAIL"
           test -n "$DIGEST_RECIPIENTS"
+          if [ "$SCHEDULED_RUN" = "true" ]; then
+            target_epoch=$(TZ=Asia/Seoul date -d "$(TZ=Asia/Seoul date +%F) 10:00:00" +%s)
+            now_epoch=$(date +%s)
+            wait_seconds=$((target_epoch - now_epoch))
+            if [ "$wait_seconds" -gt 0 ] && [ "$wait_seconds" -le 600 ]; then
+              echo "Waiting ${wait_seconds}s for 10:00 KST"
+              sleep "$wait_seconds"
+            fi
+          fi
           echo "Current KST: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
           curl --fail --retry 5 --retry-all-errors --retry-delay 20 --max-time 540 \
             -X POST \

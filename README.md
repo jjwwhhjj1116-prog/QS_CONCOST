@@ -66,8 +66,8 @@ GitHub Pages는 Python 서버를 실행하지 못합니다. 전체 기능 배포
 1. Resend에서 발신 도메인을 인증하고 API 키를 발급합니다.
 2. 관리자 설정의 **매일 아침 자료 수집·이메일 브리핑**에서 발신 주소와 API 키를 저장합니다.
 3. 알림 주소록에 사내 수신자를 등록하고 HTML 미리보기로 내용을 확인합니다.
-4. GitHub Actions의 `CONCOST daily data collection`이 월~금 00:00 UTC, 즉 09:00 KST부터 10분 간격으로 09:50까지 최신 공고·뉴스·법령을 반복 수집합니다. 각 회차는 최대 5분 안에 끝나므로 마지막 회차는 09:55 전후까지 누적됩니다.
-5. `CONCOST daily email digest`가 월~금 01:00 UTC, 즉 10:00 KST에 주소록 전체로 브리핑을 발송합니다.
+4. GitHub Actions의 `CONCOST daily data collection`이 월~금 00:00~00:50 UTC, 즉 09:00~09:50 KST에 10분 간격의 독립 작업으로 최신 공고·뉴스·법령을 반복 수집합니다. 각 회차는 최대 5분 안에 끝나므로 마지막 회차는 09:55 전후까지 누적됩니다.
+5. `CONCOST daily email digest`는 월~금 00:55 UTC에 먼저 실행된 뒤 10:00 KST까지 대기하고, 정각에 주소록 전체로 브리핑을 발송합니다.
 
 Render 무료 Web Service는 SMTP 포트가 차단되어 있으므로 메일은 Resend HTTPS API로 전송합니다. GitHub 저장소의 Actions Secret과 Render 환경변수에 동일한 `DIGEST_TRIGGER_TOKEN`을 설정해야 합니다.
 
