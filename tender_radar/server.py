@@ -52,7 +52,7 @@ def is_kst_weekday(now: datetime) -> bool:
 
 def in_collect_window(now: datetime) -> bool:
     minute = now.hour * 60 + now.minute
-    return is_kst_weekday(now) and 9 * 60 <= minute < 9 * 60 + 10
+    return is_kst_weekday(now) and 9 * 60 <= minute < 10 * 60
 
 
 def in_digest_window(now: datetime) -> bool:
@@ -62,7 +62,7 @@ def in_digest_window(now: datetime) -> bool:
 
 def in_digest_send_window(now: datetime) -> bool:
     minute = now.hour * 60 + now.minute
-    return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 10
+    return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 15
 
 
 def storage_is_persistent(db_path: Path) -> bool:
@@ -635,10 +635,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
         if parsed.path == "/api/automation/collect":
             now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
-            if self.headers.get("X-Collect-Scheduled", "").strip().lower() == "true" and not is_kst_weekday(now_kst):
+            scheduled_collect = self.headers.get("X-Collect-Scheduled", "").strip().lower() == "true"
+            if scheduled_collect and not in_collect_window(now_kst):
                 self._json({
                     "ok": True, "skipped": True,
-                    "reason": f"주말 예약 수집은 실행하지 않습니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
+                    "reason": f"예약 수집 허용시간(평일 09:00~09:59)이 아닙니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
                 })
                 return
             if not self.collection_lock.acquire(blocking=False):
@@ -698,10 +699,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "skipped": True, "reason": "예약 발송 꺼짐"})
                 return
             now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
-            if self.headers.get("X-Digest-Scheduled", "").strip().lower() == "true" and not is_kst_weekday(now_kst):
+            scheduled_digest = self.headers.get("X-Digest-Scheduled", "").strip().lower() == "true"
+            if scheduled_digest and not in_digest_send_window(now_kst):
                 self._json({
                     "ok": True, "skipped": True,
-                    "reason": f"주말 예약 메일은 발송하지 않습니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
+                    "reason": f"예약 메일 허용시간(평일 10:00~10:14)이 아닙니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
                 })
                 return
             today = now_kst.date().isoformat()
@@ -715,6 +717,16 @@ class Handler(BaseHTTPRequestHandler):
                 # 메일 요청 경로에서는 자료 수집을 절대 동기 실행하지 않는다. 수집이 느리거나
                 # 원기관이 응답하지 않을 때 메일 발송까지 함께 멈추고 Render가 503이 되는 것을
                 # 막기 위해, 09시대에 저장된 현재 스냅샷만 즉시 발송한다.
+                preview = build_email_digest(self.settings.db_path)
+                preview_counts = preview["counts"]
+                if sum(int(value) for value in preview_counts.values()) == 0:
+                    self._json({
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "수집된 입찰공고와 당일 뉴스가 모두 0건이어서 빈 메일을 발송하지 않았습니다.",
+                        **preview_counts,
+                    })
+                    return
                 recipients = [
                     email.strip().lower()
                     for email in self.headers.get("X-Digest-Recipients", "").split(",")

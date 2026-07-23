@@ -93,6 +93,10 @@ class MVPTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
             "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
         ), patch("tender_radar.server.is_kst_weekday", return_value=True), patch(
+            "tender_radar.server.in_collect_window", return_value=True
+        ), patch(
+            "tender_radar.server.in_digest_send_window", return_value=True
+        ), patch(
             "tender_radar.server.Handler._create_collection_job", return_value="scheduled-job"
         ), patch(
             "tender_radar.server.threading.Thread"
@@ -134,7 +138,9 @@ class MVPTests(unittest.TestCase):
                 "X-Digest-Recipients": "team@con-cost.co.kr",
             }
             digest_handler._json = lambda payload, status=200: digest_responses.append((payload, status))
-            with patch("tender_radar.server.send_email_digest", return_value={"ok": True}) as send_mock, patch(
+            with patch("tender_radar.server.build_email_digest", return_value={
+                "counts": {"new_notices": 1, "old_notices": 0, "new_news": 0, "old_news": 0}
+            }), patch("tender_radar.server.send_email_digest", return_value={"ok": True}) as send_mock, patch(
                 "tender_radar.cli.collect"
             ) as collect_mock:
                 digest_handler.do_POST()
@@ -146,6 +152,33 @@ class MVPTests(unittest.TestCase):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
         self.assertGreaterEqual(score, 70)
         self.assertTrue(any("공사비" in item for item in matched))
+
+    def test_scheduled_digest_never_sends_an_empty_email(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
+        ), patch("tender_radar.server.in_digest_send_window", return_value=True), patch(
+            "tender_radar.server.build_email_digest", return_value={
+                "counts": {"new_notices": 0, "old_notices": 0, "new_news": 0, "old_news": 0}
+            }
+        ), patch("tender_radar.server.send_email_digest") as send_mock:
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            handler.path = "/api/automation/digest"
+            handler.headers = {
+                "Authorization": "Bearer automation-token",
+                "X-Digest-Scheduled": "true",
+                "X-Resend-Api-Key": "re_test",
+                "X-Digest-From-Email": "CONCOST <news@con-cost.co.kr>",
+                "X-Digest-Recipients": "team@con-cost.co.kr",
+            }
+            responses = []
+            handler._json = lambda payload, status=200: responses.append((payload, status))
+            handler.do_POST()
+            self.assertTrue(responses[0][0]["skipped"])
+            self.assertIn("0건", responses[0][0]["reason"])
+            send_mock.assert_not_called()
 
     def test_english_abbreviation_does_not_match_inside_unrelated_word(self):
         score, matched = score_notice(
@@ -653,11 +686,11 @@ class MVPTests(unittest.TestCase):
         friday_late_digest = datetime(2026, 7, 10, 12, 57)
         saturday_collect = datetime(2026, 7, 11, 9, 0)
         self.assertTrue(in_collect_window(friday_collect))
-        self.assertFalse(in_collect_window(friday_late_collect))
+        self.assertTrue(in_collect_window(friday_late_collect))
         self.assertFalse(in_collect_window(friday_digest))
         self.assertTrue(in_digest_window(friday_digest))
         self.assertTrue(in_digest_send_window(friday_digest))
-        self.assertFalse(in_digest_send_window(friday_late_window_digest))
+        self.assertTrue(in_digest_send_window(friday_late_window_digest))
         self.assertFalse(in_digest_send_window(friday_late_digest))
         self.assertFalse(in_collect_window(saturday_collect))
         self.assertFalse(in_digest_window(saturday_collect.replace(hour=10)))
