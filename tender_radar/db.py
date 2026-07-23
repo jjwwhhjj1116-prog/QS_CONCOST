@@ -447,7 +447,15 @@ def stats(db_path: Path) -> dict[str, int]:
             ,SUM(CASE WHEN source='지원COK' THEN 1 ELSE 0 END) jiwoncok_count
             FROM notices"""
         ).fetchone()
-    return {key: int(row[key] or 0) for key in row.keys()}
+        news_row = conn.execute(
+            """SELECT COUNT(*) news_total,
+            SUM(CASE WHEN category='건설 주요뉴스' THEN 1 ELSE 0 END) construction_news_count,
+            SUM(CASE WHEN category='법규·제도 개정' THEN 1 ELSE 0 END) law_news_count
+            FROM news"""
+        ).fetchone()
+    result = {key: int(row[key] or 0) for key in row.keys()}
+    result.update({key: int(news_row[key] or 0) for key in news_row.keys()})
+    return result
 
 
 def list_digest_recipients(db_path: Path) -> list[dict[str, Any]]:

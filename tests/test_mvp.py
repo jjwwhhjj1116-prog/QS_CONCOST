@@ -9,7 +9,7 @@ from pathlib import Path
 
 from tender_radar.db import (
     connect, delete_digest_recipient, list_digest_recipients, save_digest_recipient,
-    get_setting, init_db, list_notices, set_setting, upsert_news, upsert_notice,
+    get_setting, init_db, list_notices, set_setting, stats, upsert_news, upsert_notice,
 )
 from tender_radar.email_digest import SEOUL, build_email_digest, build_resend_request, send_test_email
 from tender_radar.collector import collect_all
@@ -741,6 +741,26 @@ class MVPTests(unittest.TestCase):
             self.assertEqual(digest["counts"]["new_news"], 1)
             self.assertIn("오늘 공사비 검증 뉴스", digest["html"])
             self.assertNotIn("어제 공사비 검증 뉴스", digest["html"])
+
+    def test_stats_include_news_and_law_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "test.db"
+            base = {
+                "source": "테스트", "summary": "", "published_at": "2026-07-23",
+                "url": "https://example.com", "score": 60, "matched_keywords": [],
+            }
+            upsert_news(db, {
+                **base, "source_key": "news-1", "category": "건설 주요뉴스",
+                "title": "건설 주요뉴스",
+            })
+            upsert_news(db, {
+                **base, "source_key": "law-1", "category": "법규·제도 개정",
+                "title": "법규 개정",
+            })
+            summary = stats(db)
+            self.assertEqual(summary["news_total"], 2)
+            self.assertEqual(summary["construction_news_count"], 1)
+            self.assertEqual(summary["law_news_count"], 1)
 
     def test_resend_request_has_required_user_agent(self):
         request = build_resend_request("test-key", b"{}")
