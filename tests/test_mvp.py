@@ -26,8 +26,8 @@ from tender_radar.jiwoncok import (
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
 from tender_radar.secrets_store import get_secret
 from tender_radar.server import (
-    Handler, auto_collect_on_start_enabled, internal_scheduler_enabled, in_collect_window,
-    in_digest_send_window, in_digest_window,
+    Handler, auto_collect_on_start_enabled, collection_sweep_timeout_seconds,
+    internal_scheduler_enabled, in_collect_window, in_digest_send_window, in_digest_window,
 )
 
 
@@ -367,6 +367,81 @@ class MVPTests(unittest.TestCase):
                 else:
                     Handler.collection_lock_owner = None
                     Handler.collection_lock.release()
+
+    def test_slow_jiwoncok_does_not_starve_news_collection(self):
+        def slow_jiwoncok(*_):
+            time.sleep(0.5)
+            return []
+
+        news = {
+            "source": "테스트뉴스", "source_key": "parallel-news",
+            "category": "건설 주요뉴스", "title": "공사비 검증 시장 동향",
+            "summary": "", "published_at": "2026-07-27",
+            "url": "https://example.com/news", "score": 70,
+            "matched_keywords": ["공사비"],
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ",
+            {
+                "COLLECTION_JOB_TIMEOUT_SECONDS": "0.2",
+                "COLLECTION_SWEEP_TIMEOUT_SECONDS": "0.2",
+            },
+        ), patch("tender_radar.server.g2b.collect_recent", return_value=[]), patch(
+            "tender_radar.server.lh.collect_recent", return_value=[]
+        ), patch("tender_radar.server.expressway.collect_recent", return_value=[]), patch(
+            "tender_radar.server.kapt.collect_recent", return_value=[]
+        ), patch("tender_radar.server.jiwoncok.collect_recent", side_effect=slow_jiwoncok), patch(
+            "tender_radar.server.official_news.collect_official_news", return_value=[news]
+        ):
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            job_id = "parallel-test"
+            now = datetime.now().astimezone().isoformat(timespec="seconds")
+            self.assertTrue(Handler.collection_lock.acquire(blocking=False))
+            Handler.collection_lock_owner = job_id
+            try:
+                with Handler.collection_jobs_lock:
+                    Handler.collection_jobs = {
+                        job_id: {
+                            "id": job_id, "status": "running", "ok": True, "partial": False,
+                            "started_at": now, "updated_at": now, "completed_at": "",
+                            "percent": 0, "message": "테스트", "sources": [], "source_total": 0,
+                            "total": 0, "inserted": 0, "updated": 0, "unchanged": 0,
+                            "news_inserted": 0, "news_updated": 0,
+                        }
+                    }
+                handler._run_collection_job(job_id, "key", "", 48)
+                job = Handler._get_collection_job(job_id)
+                self.assertEqual(job["status"], "complete")
+                self.assertTrue(any(
+                    source["source"] == "공식 건설뉴스" and source["ok"]
+                    for source in job["sources"]
+                ))
+                self.assertTrue(any(
+                    source["source"] == "지원COK" and not source["ok"]
+                    for source in job["sources"]
+                ))
+                self.assertEqual(stats(db)["construction_news_count"], 1)
+            finally:
+                with Handler.collection_jobs_lock:
+                    Handler.collection_jobs = {}
+                Handler.collection_lock_owner = None
+                if Handler.collection_lock.acquire(blocking=False):
+                    Handler.collection_lock.release()
+                else:
+                    Handler.collection_lock.release()
+
+    def test_collection_sweep_timeout_is_bounded(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "COLLECTION_JOB_TIMEOUT_SECONDS": "285",
+                "COLLECTION_SWEEP_TIMEOUT_SECONDS": "999",
+            },
+        ):
+            self.assertEqual(collection_sweep_timeout_seconds(), 120.0)
 
     def test_stale_collection_job_can_be_expired_and_unlocks(self):
         job_id = "stale-test"
