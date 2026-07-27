@@ -58,6 +58,21 @@ def collection_sweep_timeout_seconds() -> float:
     return min(value, collection_job_timeout_seconds(), 120.0)
 
 
+def collection_max_workers() -> int:
+    """Keep collection inside small Render instances' memory limits.
+
+    Several collectors already use their own bounded worker pools. Starting all
+    top-level collectors at once multiplies those pools and can make Render kill
+    the process before any results are committed. Two top-level workers keep
+    network overlap without creating that thread/memory spike.
+    """
+    try:
+        value = int(os.getenv("COLLECTION_MAX_WORKERS", "2"))
+    except ValueError:
+        value = 2
+    return max(1, min(value, 3))
+
+
 def is_kst_weekday(now: datetime) -> bool:
     return now.weekday() < 5
 
@@ -366,7 +381,7 @@ class Handler(BaseHTTPRequestHandler):
                 message=f"{len(jobs)}개 기관을 동시에 확인합니다. {int(sweep_timeout)}초 안에 완료된 결과부터 저장합니다.",
             )
             pool = ThreadPoolExecutor(
-                max_workers=max(1, len(jobs)),
+                max_workers=min(max(1, len(jobs)), collection_max_workers()),
                 thread_name_prefix="collection-source",
             )
             future_jobs = {

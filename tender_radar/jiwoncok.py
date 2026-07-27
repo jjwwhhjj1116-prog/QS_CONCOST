@@ -507,13 +507,13 @@ def collect_recent_with_status(lookback_hours: int = 48) -> tuple[list[dict[str,
     if not sources:
         return [], []
     try:
-        configured_workers = int(os.getenv("JIWONCOK_MAX_WORKERS", "8"))
+        configured_workers = int(os.getenv("JIWONCOK_MAX_WORKERS", "3"))
     except ValueError:
-        configured_workers = 8
+        configured_workers = 3
     # Each institution is an independent source. Running all eight core
     # sources concurrently prevents early sites from consuming the entire
     # shared deadline while later institutions never get a chance to start.
-    max_workers = max(1, min(configured_workers, len(sources), 8))
+    max_workers = max(1, min(configured_workers, len(sources), 4))
     try:
         timeout_seconds = max(6.0, min(float(os.getenv("JIWONCOK_TIMEOUT_SECONDS", "16")), 25.0))
     except ValueError:

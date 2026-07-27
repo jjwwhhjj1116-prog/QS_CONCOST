@@ -42,7 +42,9 @@ def _get(url: str) -> str:
         "Accept": "text/html,application/xhtml+xml",
     })
     with urlopen(request, timeout=10) as response:
-        raw = response.read()
+        # Source pages are article indexes. Bound the response to protect the
+        # production worker from unexpectedly large or streaming documents.
+        raw = response.read(2_000_000)
         charset = response.headers.get_content_charset() or "utf-8"
     return raw.decode(charset, errors="replace")
 
@@ -156,7 +158,7 @@ def collect_industry_news() -> list[dict[str, Any]]:
             return parse_ricon(page, source, url)
         return parse_constimes(page)
 
-    with ThreadPoolExecutor(max_workers=6, thread_name_prefix="industry-news") as pool:
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="industry-news") as pool:
         futures = [pool.submit(collect_one, job) for job in jobs]
         for future in as_completed(futures):
             try:

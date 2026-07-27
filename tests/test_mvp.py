@@ -26,7 +26,7 @@ from tender_radar.jiwoncok import (
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
 from tender_radar.secrets_store import get_secret
 from tender_radar.server import (
-    Handler, auto_collect_on_start_enabled, collection_sweep_timeout_seconds,
+    Handler, auto_collect_on_start_enabled, collection_max_workers, collection_sweep_timeout_seconds,
     internal_scheduler_enabled, in_collect_window, in_digest_send_window, in_digest_window,
 )
 
@@ -660,15 +660,21 @@ class MVPTests(unittest.TestCase):
         self.assertTrue(any(status["ok"] for status in statuses))
         self.assertTrue(any(not status["ok"] for status in statuses))
 
-    def test_jiwoncok_core_sources_start_in_parallel(self):
+    def test_jiwoncok_core_sources_use_bounded_parallelism(self):
         sources = [
             {"institution": f"기관-{index}", "url": f"https://example{index}.go.kr"}
             for index in range(8)
         ]
-        barrier = threading.Barrier(8, timeout=2)
+        state = {"active": 0, "maximum": 0}
+        state_lock = threading.Lock()
 
         def fake_source(_source):
-            barrier.wait()
+            with state_lock:
+                state["active"] += 1
+                state["maximum"] = max(state["maximum"], state["active"])
+            time.sleep(0.03)
+            with state_lock:
+                state["active"] -= 1
             return []
 
         with patch.dict("os.environ", {}, clear=True), patch(
@@ -678,6 +684,13 @@ class MVPTests(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertEqual(len(statuses), 8)
         self.assertTrue(all(status["ok"] for status in statuses))
+        self.assertEqual(state["maximum"], 3)
+
+    def test_top_level_collection_workers_are_memory_bounded(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(collection_max_workers(), 2)
+        with patch.dict("os.environ", {"COLLECTION_MAX_WORKERS": "99"}, clear=True):
+            self.assertEqual(collection_max_workers(), 3)
 
     def test_parse_jiwoncok_source_page_ignores_committee_menu_labels(self):
         page = """

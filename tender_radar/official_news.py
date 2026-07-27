@@ -39,7 +39,9 @@ def _get(url: str) -> str:
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 CONCOST-Radar/1.0", "Accept": "text/html"})
     opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
     with opener.open(request, timeout=10) as response:
-        raw = response.read()
+        # News pages are list pages; cap unexpected oversized responses so one
+        # malformed upstream response cannot exhaust a small production worker.
+        raw = response.read(2_000_000)
         charset = response.headers.get_content_charset() or "utf-8"
     return raw.decode(charset, errors="replace")
 
@@ -90,7 +92,7 @@ def collect_pps() -> list[dict[str, Any]]:
             return collect_pps_board(*args)
         except Exception:
             return []
-    with ThreadPoolExecutor(max_workers=len(PPS_BOARDS), thread_name_prefix="pps-board") as pool:
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="pps-board") as pool:
         for rows in pool.map(collect_board, PPS_BOARDS):
             result.extend(rows)
     return result
@@ -116,7 +118,7 @@ def collect_molit() -> list[dict[str, Any]]:
 def collect_official_news(timeout_seconds: float = 25) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     collectors = (collect_pps, collect_molit, collect_industry_news)
-    pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="official-news")
+    pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="official-news")
     futures = [pool.submit(collector) for collector in collectors]
     pending = set(futures)
     try:
