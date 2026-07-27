@@ -73,6 +73,23 @@ def collection_max_workers() -> int:
     return max(1, min(value, 3))
 
 
+def effective_collection_lookback_hours(
+    requested_hours: int,
+    now_kst: datetime | None = None,
+) -> int:
+    """Include the previous business day's notices after a weekend.
+
+    A 48-hour query made on Monday morning only covers Saturday and Sunday.
+    Expanding Monday runs to four days includes Friday's procurement notices
+    while preserving the administrator's wider explicit selections.
+    """
+    requested = max(1, min(int(requested_hours), 168))
+    current = now_kst or datetime.now(ZoneInfo("Asia/Seoul"))
+    if current.weekday() == 0:
+        return max(requested, 96)
+    return requested
+
+
 def is_kst_weekday(now: datetime) -> bool:
     return now.weekday() < 5
 
@@ -329,6 +346,8 @@ class Handler(BaseHTTPRequestHandler):
         lookback_hours: int,
         scopes: set[str] | None = None,
     ) -> None:
+        effective_lookback = effective_collection_lookback_hours(lookback_hours)
+
         def save_notices(rows: list[dict]) -> dict[str, int]:
             return upsert_notices(self.settings.db_path, rows)
 
@@ -339,11 +358,11 @@ class Handler(BaseHTTPRequestHandler):
             return counts
 
         notice_jobs = (
-            ("g2b", "나라장터", lambda: g2b.collect_recent(service_key, lookback_hours)),
-            ("lh", "LH", lambda: lh.collect_recent(service_key, lookback_hours)),
-            ("expressway", "도로공사", lambda: expressway.collect_recent(lookback_hours)),
-            ("kapt", "공동주택관리정보시스템", lambda: kapt.collect_recent(lookback_hours)),
-            ("jiwoncok", "지원COK", lambda: jiwoncok.collect_recent(lookback_hours)),
+            ("g2b", "나라장터", lambda: g2b.collect_recent(service_key, effective_lookback)),
+            ("lh", "LH", lambda: lh.collect_recent(service_key, effective_lookback)),
+            ("expressway", "도로공사", lambda: expressway.collect_recent(effective_lookback)),
+            ("kapt", "공동주택관리정보시스템", lambda: kapt.collect_recent(effective_lookback)),
+            ("jiwoncok", "지원COK", lambda: jiwoncok.collect_recent(effective_lookback)),
         )
         news_jobs: list[tuple[str, str, object]] = [
             ("content", "공식 건설뉴스", official_news.collect_official_news)
@@ -378,7 +397,11 @@ class Handler(BaseHTTPRequestHandler):
             self._update_collection_job(
                 job_id,
                 **totals,
-                message=f"{len(jobs)}개 기관을 동시에 확인합니다. {int(sweep_timeout)}초 안에 완료된 결과부터 저장합니다.",
+                lookback_hours=effective_lookback,
+                message=(
+                    f"{len(jobs)}개 기관을 최대 {collection_max_workers()}개씩 확인합니다. "
+                    f"최근 {effective_lookback}시간 자료를 {int(sweep_timeout)}초 안에 완료된 결과부터 저장합니다."
+                ),
             )
             pool = ThreadPoolExecutor(
                 max_workers=min(max(1, len(jobs)), collection_max_workers()),

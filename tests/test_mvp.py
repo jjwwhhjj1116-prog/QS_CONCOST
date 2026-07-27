@@ -27,7 +27,8 @@ from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_not
 from tender_radar.secrets_store import get_secret
 from tender_radar.server import (
     Handler, auto_collect_on_start_enabled, collection_max_workers, collection_sweep_timeout_seconds,
-    internal_scheduler_enabled, in_collect_window, in_digest_send_window, in_digest_window,
+    effective_collection_lookback_hours, internal_scheduler_enabled, in_collect_window,
+    in_digest_send_window, in_digest_window,
 )
 
 
@@ -691,6 +692,13 @@ class MVPTests(unittest.TestCase):
             self.assertEqual(collection_max_workers(), 2)
         with patch.dict("os.environ", {"COLLECTION_MAX_WORKERS": "99"}, clear=True):
             self.assertEqual(collection_max_workers(), 3)
+
+    def test_monday_collection_includes_previous_friday(self):
+        monday = datetime(2026, 7, 27, 9, 0, tzinfo=SEOUL)
+        tuesday = datetime(2026, 7, 28, 9, 0, tzinfo=SEOUL)
+        self.assertEqual(effective_collection_lookback_hours(48, monday), 96)
+        self.assertEqual(effective_collection_lookback_hours(168, monday), 168)
+        self.assertEqual(effective_collection_lookback_hours(48, tuesday), 48)
 
     def test_parse_jiwoncok_source_page_ignores_committee_menu_labels(self):
         page = """
