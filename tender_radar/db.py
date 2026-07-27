@@ -263,13 +263,11 @@ def set_setting(db_path: Path, key: str, value: str, only_if_missing: bool = Fal
             )
 
 
-def upsert_notice(db_path: Path, notice: dict[str, Any]) -> str:
-    # CLI and web-server entry points initialize the schema once before
-    # collection. Re-running init_db for every row also recalculates the admin
-    # password hash, making a one-week refresh take minutes instead of seconds.
-    if not db_path.exists() or db_path.stat().st_size == 0:
-        init_db(db_path)
-    now = datetime.now().astimezone().isoformat(timespec="seconds")
+def _upsert_notice_conn(
+    conn: sqlite3.Connection,
+    notice: dict[str, Any],
+    now: str,
+) -> str:
     raw_json = json.dumps(notice.get("raw", {}), ensure_ascii=False, sort_keys=True)
     digest_source = json.dumps(
         {k: v for k, v in notice.items() if k not in {"raw", "matched_keywords"}},
@@ -277,73 +275,110 @@ def upsert_notice(db_path: Path, notice: dict[str, Any]) -> str:
         sort_keys=True,
     )
     content_hash = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()
-    with connect(db_path) as conn:
-        existing = conn.execute(
-            "SELECT content_hash FROM notices WHERE source=? AND source_key=?",
-            (notice["source"], notice["source_key"]),
-        ).fetchone()
-        if existing is None:
-            action = "inserted"
-        elif existing["content_hash"] == content_hash:
-            action = "unchanged"
-        else:
-            action = "updated"
-        conn.execute(
-            """
-            INSERT INTO notices (
-                source, source_key, category, title, institution, published_at,
-                deadline_at, estimated_price, region, notice_type, change_reason,
-                changed_at, url, score,
-                matched_keywords, content_hash, raw_json, first_seen_at, last_seen_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(source, source_key) DO UPDATE SET
-                category=excluded.category, title=excluded.title,
-                institution=excluded.institution, published_at=excluded.published_at,
-                deadline_at=excluded.deadline_at, estimated_price=excluded.estimated_price,
-                region=excluded.region, notice_type=excluded.notice_type,
-                change_reason=excluded.change_reason, changed_at=excluded.changed_at,
-                url=excluded.url, score=excluded.score,
-                matched_keywords=excluded.matched_keywords,
-                content_hash=excluded.content_hash, raw_json=excluded.raw_json,
-                last_seen_at=excluded.last_seen_at
-            """,
-            (
-                notice["source"], notice["source_key"], notice["category"], notice["title"],
-                notice.get("institution", ""), notice.get("published_at", ""),
-                notice.get("deadline_at", ""), notice.get("estimated_price"),
-                notice.get("region", ""), notice.get("notice_type", "신규"),
-                notice.get("change_reason", ""), notice.get("changed_at", ""),
-                notice.get("url", ""), notice.get("score", 0),
-                json.dumps(notice.get("matched_keywords", []), ensure_ascii=False),
-                content_hash, raw_json, now, now,
-            ),
-        )
+    existing = conn.execute(
+        "SELECT content_hash FROM notices WHERE source=? AND source_key=?",
+        (notice["source"], notice["source_key"]),
+    ).fetchone()
+    if existing is None:
+        action = "inserted"
+    elif existing["content_hash"] == content_hash:
+        action = "unchanged"
+    else:
+        action = "updated"
+    conn.execute(
+        """
+        INSERT INTO notices (
+            source, source_key, category, title, institution, published_at,
+            deadline_at, estimated_price, region, notice_type, change_reason,
+            changed_at, url, score,
+            matched_keywords, content_hash, raw_json, first_seen_at, last_seen_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, source_key) DO UPDATE SET
+            category=excluded.category, title=excluded.title,
+            institution=excluded.institution, published_at=excluded.published_at,
+            deadline_at=excluded.deadline_at, estimated_price=excluded.estimated_price,
+            region=excluded.region, notice_type=excluded.notice_type,
+            change_reason=excluded.change_reason, changed_at=excluded.changed_at,
+            url=excluded.url, score=excluded.score,
+            matched_keywords=excluded.matched_keywords,
+            content_hash=excluded.content_hash, raw_json=excluded.raw_json,
+            last_seen_at=excluded.last_seen_at
+        """,
+        (
+            notice["source"], notice["source_key"], notice["category"], notice["title"],
+            notice.get("institution", ""), notice.get("published_at", ""),
+            notice.get("deadline_at", ""), notice.get("estimated_price"),
+            notice.get("region", ""), notice.get("notice_type", "신규"),
+            notice.get("change_reason", ""), notice.get("changed_at", ""),
+            notice.get("url", ""), notice.get("score", 0),
+            json.dumps(notice.get("matched_keywords", []), ensure_ascii=False),
+            content_hash, raw_json, now, now,
+        ),
+    )
     return action
 
 
-def upsert_news(db_path: Path, item: dict[str, Any]) -> str:
-    # The database is initialized once by the caller; avoid row-by-row schema
-    # and bootstrap work during a digest refresh.
+def upsert_notice(db_path: Path, notice: dict[str, Any]) -> str:
     if not db_path.exists() or db_path.stat().st_size == 0:
         init_db(db_path)
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     with connect(db_path) as conn:
-        existing = conn.execute(
-            "SELECT id FROM news WHERE source=? AND source_key=?",
-            (item["source"], item["source_key"]),
-        ).fetchone()
-        conn.execute(
-            """INSERT INTO news(source,source_key,category,title,summary,published_at,url,score,
-            matched_keywords,first_seen_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(source,source_key) DO UPDATE SET category=excluded.category,title=excluded.title,
-            summary=excluded.summary,published_at=excluded.published_at,url=excluded.url,
-            score=excluded.score,matched_keywords=excluded.matched_keywords,last_seen_at=excluded.last_seen_at""",
-            (item["source"], item["source_key"], item["category"], item["title"],
-             item.get("summary", ""), item.get("published_at", ""), item.get("url", ""),
-             item.get("score", 0), json.dumps(item.get("matched_keywords", []), ensure_ascii=False),
-             now, now),
-        )
+        return _upsert_notice_conn(conn, notice, now)
+
+
+def upsert_notices(db_path: Path, notices: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"inserted": 0, "updated": 0, "unchanged": 0}
+    if not notices:
+        return counts
+    init_db(db_path)
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with connect(db_path) as conn:
+        for notice in notices:
+            counts[_upsert_notice_conn(conn, notice, now)] += 1
+    return counts
+
+
+def _upsert_news_conn(
+    conn: sqlite3.Connection,
+    item: dict[str, Any],
+    now: str,
+) -> str:
+    existing = conn.execute(
+        "SELECT id FROM news WHERE source=? AND source_key=?",
+        (item["source"], item["source_key"]),
+    ).fetchone()
+    conn.execute(
+        """INSERT INTO news(source,source_key,category,title,summary,published_at,url,score,
+        matched_keywords,first_seen_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(source,source_key) DO UPDATE SET category=excluded.category,title=excluded.title,
+        summary=excluded.summary,published_at=excluded.published_at,url=excluded.url,
+        score=excluded.score,matched_keywords=excluded.matched_keywords,last_seen_at=excluded.last_seen_at""",
+        (item["source"], item["source_key"], item["category"], item["title"],
+         item.get("summary", ""), item.get("published_at", ""), item.get("url", ""),
+         item.get("score", 0), json.dumps(item.get("matched_keywords", []), ensure_ascii=False),
+         now, now),
+    )
     return "updated" if existing else "inserted"
+
+
+def upsert_news(db_path: Path, item: dict[str, Any]) -> str:
+    if not db_path.exists() or db_path.stat().st_size == 0:
+        init_db(db_path)
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with connect(db_path) as conn:
+        return _upsert_news_conn(conn, item, now)
+
+
+def upsert_news_many(db_path: Path, items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"inserted": 0, "updated": 0}
+    if not items:
+        return counts
+    init_db(db_path)
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with connect(db_path) as conn:
+        for item in items:
+            counts[_upsert_news_conn(conn, item, now)] += 1
+    return counts
 
 
 def prune_news(db_path: Path, items: list[dict[str, Any]]) -> int:

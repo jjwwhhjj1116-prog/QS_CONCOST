@@ -443,6 +443,46 @@ class MVPTests(unittest.TestCase):
         ):
             self.assertEqual(collection_sweep_timeout_seconds(), 120.0)
 
+    def test_official_news_returns_fast_sources_when_one_source_times_out(self):
+        fast_item = {
+            "source": "빠른뉴스", "source_key": "fast-news",
+            "category": "건설 주요뉴스", "title": "공사비 검증 뉴스",
+            "summary": "", "published_at": "2026-07-27",
+            "url": "https://example.com/fast", "score": 70,
+            "matched_keywords": ["공사비"],
+        }
+
+        def slow_source():
+            time.sleep(0.3)
+            return []
+
+        with patch("tender_radar.official_news.collect_pps", return_value=[fast_item]), patch(
+            "tender_radar.official_news.collect_molit", return_value=[]
+        ), patch("tender_radar.official_news.collect_industry_news", side_effect=slow_source):
+            from tender_radar.official_news import collect_official_news
+            started = time.monotonic()
+            rows = collect_official_news(timeout_seconds=0.05)
+            elapsed = time.monotonic() - started
+        self.assertEqual(rows, [fast_item])
+        self.assertLess(elapsed, 0.2)
+
+    def test_bulk_news_upsert_counts_rows_in_one_batch(self):
+        from tender_radar.db import upsert_news_many
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "test.db"
+            rows = [{
+                "source": "배치뉴스", "source_key": f"batch-{index}",
+                "category": "건설 주요뉴스", "title": f"공사비 뉴스 {index}",
+                "summary": "", "published_at": "2026-07-27",
+                "url": f"https://example.com/{index}", "score": 60,
+                "matched_keywords": ["공사비"],
+            } for index in range(120)]
+            first = upsert_news_many(db, rows)
+            second = upsert_news_many(db, rows)
+            self.assertEqual(first, {"inserted": 120, "updated": 0})
+            self.assertEqual(second, {"inserted": 0, "updated": 120})
+            self.assertEqual(stats(db)["construction_news_count"], 120)
+
     def test_stale_collection_job_can_be_expired_and_unlocks(self):
         job_id = "stale-test"
         old = (datetime.now().astimezone() - timedelta(seconds=310)).isoformat(timespec="seconds")

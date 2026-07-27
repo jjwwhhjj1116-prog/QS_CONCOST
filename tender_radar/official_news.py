@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import http.cookiejar
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError, ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urljoin
 from urllib.request import HTTPCookieProcessor, Request, build_opener
@@ -113,16 +113,25 @@ def collect_molit() -> list[dict[str, Any]]:
     return result
 
 
-def collect_official_news() -> list[dict[str, Any]]:
+def collect_official_news(timeout_seconds: float = 25) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     collectors = (collect_pps, collect_molit, collect_industry_news)
-    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="official-news") as pool:
-        futures = [pool.submit(collector) for collector in collectors]
-        for future in futures:
+    pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="official-news")
+    futures = [pool.submit(collector) for collector in collectors]
+    pending = set(futures)
+    try:
+        for future in as_completed(futures, timeout=max(0.01, timeout_seconds)):
+            pending.discard(future)
             try:
                 result.extend(future.result())
             except Exception:
                 continue
+    except TimeoutError:
+        pass
+    finally:
+        for future in pending:
+            future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
     deduped: list[dict[str, Any]] = []
     seen_titles: set[str] = set()
     for item in result:

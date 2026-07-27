@@ -23,7 +23,8 @@ from .config import Settings
 from .db import (
     authenticate_admin, change_admin_password, get_setting, list_notices, set_setting,
     delete_digest_recipient, init_db, list_digest_deliveries, list_digest_recipients,
-    list_news, prune_news, save_digest_recipient, stats, update_status, upsert_news, upsert_notice,
+    list_news, prune_news, save_digest_recipient, stats, update_status,
+    upsert_news, upsert_news_many, upsert_notice, upsert_notices,
 )
 from .collector import collect_all, collect_news
 from . import expressway, g2b, jiwoncok, kapt, law_news, lh, official_news
@@ -314,15 +315,10 @@ class Handler(BaseHTTPRequestHandler):
         scopes: set[str] | None = None,
     ) -> None:
         def save_notices(rows: list[dict]) -> dict[str, int]:
-            counts = {"inserted": 0, "updated": 0, "unchanged": 0}
-            for notice in rows:
-                counts[upsert_notice(self.settings.db_path, notice)] += 1
-            return counts
+            return upsert_notices(self.settings.db_path, rows)
 
         def save_news(rows: list[dict]) -> dict[str, int]:
-            counts = {"inserted": 0, "updated": 0}
-            for item in rows:
-                counts[upsert_news(self.settings.db_path, item)] += 1
+            counts = upsert_news_many(self.settings.db_path, rows)
             if rows:
                 prune_news(self.settings.db_path, rows)
             return counts
