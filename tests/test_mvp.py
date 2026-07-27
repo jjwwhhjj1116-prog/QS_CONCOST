@@ -33,14 +33,16 @@ from tender_radar.server import (
 
 
 class MVPTests(unittest.TestCase):
-    def test_render_does_not_start_a_duplicate_collector(self):
+    def test_render_startup_recovery_respects_explicit_setting(self):
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "true"}, clear=True):
-            self.assertFalse(auto_collect_on_start_enabled())
+            self.assertTrue(auto_collect_on_start_enabled())
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "false"}, clear=True):
             self.assertFalse(auto_collect_on_start_enabled())
 
-    def test_render_web_process_never_runs_internal_scheduler(self):
+    def test_render_scheduler_respects_explicit_setting(self):
         with patch.dict("os.environ", {"RENDER": "true", "SCHEDULE_JOBS": "true"}, clear=True):
+            self.assertTrue(internal_scheduler_enabled())
+        with patch.dict("os.environ", {"RENDER": "true", "SCHEDULE_JOBS": "false"}, clear=True):
             self.assertFalse(internal_scheduler_enabled())
         with patch.dict("os.environ", {"SCHEDULE_JOBS": "true"}, clear=True):
             self.assertTrue(internal_scheduler_enabled())

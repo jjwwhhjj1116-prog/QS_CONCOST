@@ -13,17 +13,17 @@ services:
       - key: AUTO_COLLECT_INTERVAL_MINUTES
         value: 0
       - key: AUTO_COLLECT_ON_START
-        value: "false"
+        value: "true"
       # The free web instance can restart with an empty local SQLite volume.
       # Rebuilding a full week keeps the opportunity screen useful after a restart.
       - key: LOOKBACK_HOURS
         value: "72"
       - key: JIWONCOK_MAX_WORKERS
-        value: "8"
+        value: "3"
       - key: JIWONCOK_TIMEOUT_SECONDS
         value: "16"
       - key: SCHEDULE_JOBS
-        value: "false"
+        value: "true"
       - key: COOKIE_SECURE
         value: "true"
       - key: ADMIN_USERNAME

@@ -137,11 +137,10 @@ def storage_is_persistent(db_path: Path) -> bool:
 
 
 def auto_collect_on_start_enabled() -> bool:
-    # Existing Render services can retain an old AUTO_COLLECT_ON_START=true
-    # value even after render.yaml changes. Production must have exactly one
-    # collector (the GitHub 09:00 workflow), so ignore the stale value there.
-    if os.getenv("RENDER", "").strip().lower() == "true":
-        return False
+    # Startup recovery only runs when the database is empty and it shares the
+    # same process-wide collection lock as manual/scheduled collection. It is
+    # therefore safe on Render and prevents a deploy/restart from leaving the
+    # dashboard empty until the next day's external schedule.
     configured = os.getenv("AUTO_COLLECT_ON_START", "").strip().lower()
     if configured:
         return configured in {"1", "true", "yes"}
@@ -149,11 +148,9 @@ def auto_collect_on_start_enabled() -> bool:
 
 
 def internal_scheduler_enabled() -> bool:
-    # Production scheduling belongs to the dedicated Render Cron services.
-    # A scheduler inside every web process can duplicate delivery after deploys,
-    # restarts, or scale-out regardless of local SQLite bookkeeping.
-    if os.getenv("RENDER", "").strip().lower() == "true":
-        return False
+    # Production keeps this lightweight KST scheduler as the primary exact-time
+    # trigger. External GitHub schedules remain a delayed backup; the daily DB
+    # marker and Resend idempotency key prevent duplicate delivery.
     return os.getenv("SCHEDULE_JOBS", "1").strip().lower() in {"1", "true", "yes"}
 
 
