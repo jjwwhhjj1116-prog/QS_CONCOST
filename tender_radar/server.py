@@ -148,7 +148,11 @@ def auto_collect_on_start_enabled() -> bool:
     configured = os.getenv("AUTO_COLLECT_ON_START", "").strip().lower()
     if configured:
         return configured in {"1", "true", "yes"}
-    return False
+    # Existing Render services created before this variable was added to the
+    # Blueprint do not automatically receive the new key. Render always exposes
+    # its own platform marker, so an empty deployment still recovers without an
+    # administrator opening the site.
+    return bool(os.getenv("RENDER", "").strip() or os.getenv("RENDER_SERVICE_ID", "").strip())
 
 
 def internal_scheduler_enabled() -> bool:
