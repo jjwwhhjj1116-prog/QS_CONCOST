@@ -643,6 +643,27 @@ class MVPTests(unittest.TestCase):
         self.assertGreaterEqual(rows[0]["score"], MIN_NOTICE_SCORE)
         self.assertTrue(should_keep_notice(rows[0]))
 
+    def test_busan_redevelopment_source_backfills_two_weeks(self):
+        source = {
+            "institution": "부산광역시 정비사업 통합홈페이지",
+            "url": "https://dynamice.busan.go.kr/view.do?no=287",
+            "history_days": "14",
+        }
+        old_but_relevant = {
+            "source": "지원COK", "source_key": "busan-20154", "category": "용역",
+            "title": "범일3-1구역 공사비 협상을 위한 적산 용역",
+            "institution": source["institution"], "published_at": "2026-07-22",
+            "deadline_at": "", "estimated_price": None, "region": "부산",
+            "notice_type": "신규", "change_reason": "", "changed_at": "",
+            "url": "https://dynamice.busan.go.kr/example", "score": 65,
+            "matched_keywords": ["전문업무:공사비·견적(적산)"], "raw": {},
+        }
+        with patch("tender_radar.jiwoncok.active_source_pages", return_value=[source]), patch(
+            "tender_radar.jiwoncok.collect_source_page", return_value=[old_but_relevant]
+        ):
+            rows, _statuses = collect_recent_with_status(lookback_hours=48)
+        self.assertEqual([row["source_key"] for row in rows], ["busan-20154"])
+
     def test_discover_jiwoncok_board_urls(self):
         page = """
         <a href="/intro">기관소개</a>

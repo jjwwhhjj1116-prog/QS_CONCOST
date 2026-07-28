@@ -60,6 +60,7 @@ SOURCE_PAGES = (
         "url": "https://dynamice.busan.go.kr/view.do?no=287",
         "direct": "1",
         "parser": "busan_redevelopment",
+        "history_days": "14",
     },
     {"institution": "서울교통공사", "url": "https://www.seoulmetro.co.kr/kr/board.do?menuIdx=546", "direct": "1"},
     {"institution": "창원시", "url": "https://www.changwon.go.kr/cwportal/10310/10438/10439.web"},
@@ -555,9 +556,19 @@ def collect_source_page(source: dict[str, str]) -> list[dict[str, Any]]:
 def _collect_source_status(source: dict[str, str], cutoff_date: str) -> dict[str, Any]:
     try:
         rows = collect_source_page(source)
+        source_cutoff = cutoff_date
+        try:
+            history_days = int(source.get("history_days", "0"))
+        except ValueError:
+            history_days = 0
+        if history_days > 0:
+            source_cutoff = min(
+                source_cutoff,
+                (datetime.now(SEOUL_TZ) - timedelta(days=history_days)).date().isoformat(),
+            )
         kept = [
             row for row in rows
-            if should_keep_notice(row) and (not row.get("published_at") or row["published_at"] >= cutoff_date)
+            if should_keep_notice(row) and (not row.get("published_at") or row["published_at"] >= source_cutoff)
         ]
         return {
             "source": source["institution"],
