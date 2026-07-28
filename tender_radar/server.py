@@ -455,8 +455,14 @@ class Handler(BaseHTTPRequestHandler):
                     f"최근 {effective_lookback}시간 자료를 {int(sweep_timeout)}초 안에 완료된 결과부터 저장합니다."
                 ),
             )
+            max_workers = min(max(1, len(jobs)), collection_max_workers())
+            if scopes is not None and {"pipeline", "cost"} & scopes:
+                # Pipeline/cost collectors already fan out internally. Running
+                # both at once can exceed a Render Free instance's memory and
+                # make the web health check return 502 during startup recovery.
+                max_workers = 1
             pool = ThreadPoolExecutor(
-                max_workers=min(max(1, len(jobs)), collection_max_workers()),
+                max_workers=max_workers,
                 thread_name_prefix="collection-source",
             )
             future_jobs = {
