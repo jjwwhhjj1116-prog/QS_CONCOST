@@ -36,7 +36,7 @@ jobs:
               0)  collect_scopes="g2b,pipeline" ;;
               10) collect_scopes="g2b,cost" ;;
               20) collect_scopes="g2b,jiwoncok" ;;
-              30) collect_scopes="g2b,expressway" ;;
+              30) collect_scopes="g2b,expressway,kwater,kapt" ;;
               40) collect_scopes="g2b,content" ;;
               50) collect_scopes="g2b,jiwoncok" ;;
               *)  collect_scopes="g2b" ;;

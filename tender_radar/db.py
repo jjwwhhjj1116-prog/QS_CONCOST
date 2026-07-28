@@ -656,6 +656,7 @@ def stats(db_path: Path) -> dict[str, int]:
             ,SUM(CASE WHEN source='누리장터' THEN 1 ELSE 0 END) nuri_count
             ,SUM(CASE WHEN source='LH' THEN 1 ELSE 0 END) lh_count
             ,SUM(CASE WHEN source='도로공사' THEN 1 ELSE 0 END) ex_count
+            ,SUM(CASE WHEN source='K-water' THEN 1 ELSE 0 END) kwater_count
             ,SUM(CASE WHEN source='공동주택관리정보시스템' THEN 1 ELSE 0 END) kapt_count
             ,SUM(CASE WHEN source='지원COK' THEN 1 ELSE 0 END) jiwoncok_count
             FROM notices"""

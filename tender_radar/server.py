@@ -29,8 +29,8 @@ from .db import (
 )
 from .collector import collect_all, collect_news
 from . import (
-    expressway, g2b, jiwoncok, kapt, law_news, lh, nuri, official_news,
-    procurement_intelligence,
+    apartment_api, expressway, g2b, jiwoncok, kapt, kwater, law_news, lh, nuri,
+    official_news, procurement_intelligence,
 )
 from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
 from .jiwoncok import parse_jiwoncok_email
@@ -322,7 +322,10 @@ class Handler(BaseHTTPRequestHandler):
             if not job or job.get("status") != "running":
                 return json.loads(json.dumps(job, ensure_ascii=False)) if job else None
             known_sources = {source.get("source") for source in job.get("sources", [])}
-            for source in ("나라장터", "LH", "도로공사", "공동주택관리정보시스템", "공식 건설뉴스", "국가법령정보"):
+            for source in (
+                "나라장터", "LH", "도로공사", "K-water",
+                "공동주택관리정보시스템", "공식 건설뉴스", "국가법령정보",
+            ):
                 if source not in known_sources:
                     job["sources"].append({"source": source, "ok": False, "total": 0, "error": reason})
             job.update({
@@ -368,12 +371,30 @@ class Handler(BaseHTTPRequestHandler):
         def save_costs(rows: list[dict]) -> dict[str, int]:
             return upsert_cost_records(self.settings.db_path, rows)
 
+        def collect_apartment_notices() -> list[dict]:
+            rows = apartment_api.collect_recent(
+                service_key, effective_lookback
+            )
+            try:
+                rows.extend(kapt.collect_recent(effective_lookback))
+            except Exception:
+                # The official Open API is the primary source. A K-apt HTML
+                # layout change must not discard API rows that were fetched.
+                if not rows:
+                    raise
+            deduped = {
+                (row.get("source", ""), row.get("source_key", "")): row
+                for row in rows
+            }
+            return list(deduped.values())
+
         notice_jobs = (
             ("g2b", "나라장터", lambda: g2b.collect_recent(service_key, effective_lookback)),
             ("nuri", "누리장터", lambda: nuri.collect_recent(service_key, effective_lookback)),
             ("lh", "LH", lambda: lh.collect_recent(service_key, effective_lookback)),
             ("expressway", "도로공사", lambda: expressway.collect_recent(effective_lookback)),
-            ("kapt", "공동주택관리정보시스템", lambda: kapt.collect_recent(effective_lookback)),
+            ("kwater", "K-water", lambda: kwater.collect_recent(service_key, effective_lookback)),
+            ("kapt", "공동주택관리정보시스템", collect_apartment_notices),
             ("jiwoncok", "지원COK", lambda: jiwoncok.collect_recent(effective_lookback)),
         )
         news_jobs: list[tuple[str, str, object]] = [
@@ -806,7 +827,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 law_key = get_secret(self.settings.db_path, "law_api_oc")
                 allowed_scopes = {
-                    "g2b", "nuri", "lh", "expressway", "kapt", "jiwoncok",
+                    "g2b", "nuri", "lh", "expressway", "kwater", "kapt", "jiwoncok",
                     "content", "pipeline", "cost",
                 }
                 requested_scopes = {
@@ -1048,7 +1069,7 @@ class Handler(BaseHTTPRequestHandler):
                 lookback_hours,
                 {
                     "pipeline", "cost", "g2b", "nuri", "lh", "expressway",
-                    "kapt", "jiwoncok", "content",
+                    "kwater", "kapt", "jiwoncok", "content",
                 },
             ),
             name=f"collection-{job_id}",
@@ -1217,7 +1238,10 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                 runner.settings = settings
                 missing_scopes = set()
                 if current_stats.get("total", 0) == 0:
-                    missing_scopes.update({"g2b", "nuri", "lh", "expressway", "kapt", "jiwoncok", "content"})
+                    missing_scopes.update({
+                        "g2b", "nuri", "lh", "expressway", "kwater",
+                        "kapt", "jiwoncok", "content",
+                    })
                 if current_stats.get("pipeline_count", 0) == 0:
                     missing_scopes.add("pipeline")
                 if current_stats.get("cost_count", 0) == 0:

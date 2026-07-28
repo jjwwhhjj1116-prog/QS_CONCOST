@@ -231,7 +231,7 @@ def _cost_item(item: dict[str, Any], record_type: str, category: str) -> dict[st
         award_amount = _money(_pick(item, "amount"))
         contract_amount = None
         company = str(_pick(item, "bidResultContent"))
-        recorded_at = str(_pick(item, "bidRegdate"))
+        recorded_at = str(_pick(item, "bidRegDate", "bidRegdate"))
         rate = None
         url = ""
     else:
@@ -323,8 +323,8 @@ def collect_cost_records(service_key: str, lookback_hours: int = 168) -> list[di
             service_key,
             {
                 "_type": "json",
-                "bidPblancDtFrom": start.strftime("%Y%m%d"),
-                "bidPblancDtTo": now.strftime("%Y%m%d"),
+                "startDate": start.strftime("%Y%m%d"),
+                "endDate": now.strftime("%Y%m%d"),
             },
             rows=100,
             max_pages=1,

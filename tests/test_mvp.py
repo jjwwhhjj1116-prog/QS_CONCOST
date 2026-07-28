@@ -18,6 +18,8 @@ from tender_radar.g2b import fetch_category, normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
+from tender_radar.apartment_api import normalize_item as normalize_apartment_api_item
+from tender_radar.kwater import normalize_item as normalize_kwater_item
 from tender_radar.nuri import normalize_item as normalize_nuri_item
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
 from tender_radar.jiwoncok import (
@@ -34,6 +36,20 @@ from tender_radar.server import (
 
 
 class MVPTests(unittest.TestCase):
+    def setUp(self):
+        self.apartment_api_patcher = patch(
+            "tender_radar.server.apartment_api.collect_recent", return_value=[]
+        )
+        self.kwater_patcher = patch(
+            "tender_radar.server.kwater.collect_recent", return_value=[]
+        )
+        self.apartment_api_patcher.start()
+        self.kwater_patcher.start()
+
+    def tearDown(self):
+        self.kwater_patcher.stop()
+        self.apartment_api_patcher.stop()
+
     def test_render_startup_recovery_respects_explicit_setting(self):
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "true"}, clear=True):
             self.assertTrue(auto_collect_on_start_enabled())
@@ -849,6 +865,33 @@ class MVPTests(unittest.TestCase):
         self.assertLess(notice["score"], 20)
         self.assertIn("bidNum=20260707125216962", notice["url"])
         self.assertEqual(notice["notice_type"], "신규")
+
+    def test_normalize_apartment_api_notice(self):
+        notice = normalize_apartment_api_item({
+            "bidNum": "APT-2026-1",
+            "bidTitle": "재건축 정비사업 공사비 검증 및 적산 용역",
+            "bidKaptname": "서울 재건축조합",
+            "bidArea": "서울",
+            "bidRegDate": "20260728100000",
+            "bidDeadline": "20260805170000",
+            "bidState": "1",
+        })
+        self.assertEqual(notice["source"], "공동주택관리정보시스템")
+        self.assertGreaterEqual(notice["score"], MIN_NOTICE_SCORE)
+        self.assertTrue(should_keep_notice(notice))
+
+    def test_normalize_kwater_notice(self):
+        notice = normalize_kwater_item({
+            "tndrPbanno": "K-WATER-2026-1",
+            "tndrPblancNm": "건설공사 원가계산 및 설계내역서 검토 용역",
+            "cntrctDeptNm": "한국수자원공사",
+            "tndrPblancDe": "20260728",
+            "tndrPblancEnddt": "20260805",
+            "tndrPlnprc": "120000000",
+        }, "용역")
+        self.assertEqual(notice["source"], "K-water")
+        self.assertGreaterEqual(notice["score"], MIN_NOTICE_SCORE)
+        self.assertTrue(should_keep_notice(notice))
 
     def test_normalize_ex_notice(self):
         notice = normalize_ex_item({"noti_no": "2026001", "bid_rev": 1, "noti_nm": "도로 설계용역", "noti_date": "20260703"}, "용역")
