@@ -69,6 +69,54 @@ CREATE TABLE IF NOT EXISTS news (
     UNIQUE(source, source_key)
 );
 CREATE INDEX IF NOT EXISTS idx_news_published ON news(published_at DESC);
+CREATE TABLE IF NOT EXISTS procurement_pipeline (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    institution TEXT NOT NULL DEFAULT '',
+    published_at TEXT NOT NULL DEFAULT '',
+    planned_at TEXT NOT NULL DEFAULT '',
+    amount INTEGER,
+    region TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    score INTEGER NOT NULL DEFAULT 0,
+    matched_keywords TEXT NOT NULL DEFAULT '[]',
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    UNIQUE(source, source_key, stage)
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_stage_date
+ON procurement_pipeline(stage,published_at DESC,score DESC);
+CREATE TABLE IF NOT EXISTS cost_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    record_type TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    institution TEXT NOT NULL DEFAULT '',
+    notice_no TEXT NOT NULL DEFAULT '',
+    base_amount INTEGER,
+    award_amount INTEGER,
+    contract_amount INTEGER,
+    award_rate REAL,
+    company TEXT NOT NULL DEFAULT '',
+    recorded_at TEXT NOT NULL DEFAULT '',
+    region TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    score INTEGER NOT NULL DEFAULT 0,
+    matched_keywords TEXT NOT NULL DEFAULT '[]',
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    UNIQUE(source, source_key, record_type)
+);
+CREATE INDEX IF NOT EXISTS idx_cost_record_date
+ON cost_records(record_type,recorded_at DESC,score DESC);
 CREATE TABLE IF NOT EXISTS digest_recipients (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL UNIQUE,
@@ -381,6 +429,83 @@ def upsert_news_many(db_path: Path, items: list[dict[str, Any]]) -> dict[str, in
     return counts
 
 
+def _upsert_generic_rows(
+    db_path: Path,
+    table: str,
+    rows: list[dict[str, Any]],
+    key_columns: tuple[str, ...],
+    columns: tuple[str, ...],
+) -> dict[str, int]:
+    counts = {"inserted": 0, "updated": 0, "unchanged": 0}
+    if not rows:
+        return counts
+    init_db(db_path)
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with connect(db_path) as conn:
+        for item in rows:
+            where = " AND ".join(f"{name}=?" for name in key_columns)
+            existing = conn.execute(
+                f"SELECT raw_json FROM {table} WHERE {where}",
+                tuple(item.get(name, "") for name in key_columns),
+            ).fetchone()
+            raw_json = json.dumps(item.get("raw", {}), ensure_ascii=False, sort_keys=True)
+            if existing is None:
+                action = "inserted"
+            elif existing["raw_json"] == raw_json:
+                action = "unchanged"
+            else:
+                action = "updated"
+            insert_columns = (*columns, "raw_json", "first_seen_at", "last_seen_at")
+            values = [
+                json.dumps(item.get(name, []), ensure_ascii=False)
+                if name == "matched_keywords"
+                else item.get(name)
+                for name in columns
+            ]
+            marks = ",".join("?" for _ in insert_columns)
+            updates = ",".join(
+                f"{name}=excluded.{name}"
+                for name in (*columns, "raw_json", "last_seen_at")
+                if name not in key_columns
+            )
+            conn.execute(
+                f"INSERT INTO {table}({','.join(insert_columns)}) VALUES({marks}) "
+                f"ON CONFLICT({','.join(key_columns)}) DO UPDATE SET {updates}",
+                (*values, raw_json, now, now),
+            )
+            counts[action] += 1
+    return counts
+
+
+def upsert_pipeline_items(db_path: Path, items: list[dict[str, Any]]) -> dict[str, int]:
+    return _upsert_generic_rows(
+        db_path,
+        "procurement_pipeline",
+        items,
+        ("source", "source_key", "stage"),
+        (
+            "source", "source_key", "stage", "category", "title", "institution",
+            "published_at", "planned_at", "amount", "region", "url", "score",
+            "matched_keywords",
+        ),
+    )
+
+
+def upsert_cost_records(db_path: Path, items: list[dict[str, Any]]) -> dict[str, int]:
+    return _upsert_generic_rows(
+        db_path,
+        "cost_records",
+        items,
+        ("source", "source_key", "record_type"),
+        (
+            "source", "source_key", "record_type", "category", "title",
+            "institution", "notice_no", "base_amount", "award_amount",
+            "contract_amount", "award_rate", "company", "recorded_at", "region",
+            "url", "score", "matched_keywords",
+        ),
+    )
+
+
 def prune_news(db_path: Path, items: list[dict[str, Any]]) -> int:
     """Remove stale rows only for sources that returned at least one valid item."""
     by_source: dict[str, set[str]] = {}
@@ -457,6 +582,58 @@ def list_notices(
     return result
 
 
+def _list_intelligence_rows(
+    db_path: Path,
+    table: str,
+    type_column: str,
+    type_value: str = "",
+    query: str = "",
+    min_score: int = 40,
+    limit: int = 300,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    clauses, params = ["score >= ?"], [min_score]
+    if type_value:
+        clauses.append(f"{type_column}=?")
+        params.append(type_value)
+    if query:
+        clauses.append("(title LIKE ? OR institution LIKE ? OR region LIKE ?)")
+        like = f"%{query}%"
+        params.extend([like, like, like])
+    order_date = "published_at" if table == "procurement_pipeline" else "recorded_at"
+    params.append(limit)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM {table} WHERE {' AND '.join(clauses)} "
+            f"ORDER BY score DESC,{order_date} DESC LIMIT ?",
+            params,
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["matched_keywords"] = json.loads(item.get("matched_keywords") or "[]")
+        item.pop("raw_json", None)
+        result.append(item)
+    return result
+
+
+def list_pipeline_items(
+    db_path: Path, stage: str = "", query: str = "", min_score: int = 40, limit: int = 300
+) -> list[dict[str, Any]]:
+    return _list_intelligence_rows(
+        db_path, "procurement_pipeline", "stage", stage, query, min_score, limit
+    )
+
+
+def list_cost_records(
+    db_path: Path, record_type: str = "", query: str = "", min_score: int = 40,
+    limit: int = 300
+) -> list[dict[str, Any]]:
+    return _list_intelligence_rows(
+        db_path, "cost_records", "record_type", record_type, query, min_score, limit
+    )
+
+
 def update_status(db_path: Path, notice_id: int, status: str) -> bool:
     if status not in {"new", "review", "watch", "excluded"}:
         return False
@@ -489,8 +666,12 @@ def stats(db_path: Path) -> dict[str, int]:
             SUM(CASE WHEN category='법규·제도 개정' THEN 1 ELSE 0 END) law_news_count
             FROM news"""
         ).fetchone()
+        pipeline_count = conn.execute("SELECT COUNT(*) FROM procurement_pipeline").fetchone()[0]
+        cost_count = conn.execute("SELECT COUNT(*) FROM cost_records").fetchone()[0]
     result = {key: int(row[key] or 0) for key in row.keys()}
     result.update({key: int(news_row[key] or 0) for key in news_row.keys()})
+    result["pipeline_count"] = int(pipeline_count or 0)
+    result["cost_count"] = int(cost_count or 0)
     return result
 
 

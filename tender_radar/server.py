@@ -23,11 +23,15 @@ from .config import Settings
 from .db import (
     authenticate_admin, change_admin_password, get_setting, list_notices, set_setting,
     delete_digest_recipient, init_db, list_digest_deliveries, list_digest_recipients,
-    list_news, prune_news, save_digest_recipient, stats, update_status,
-    upsert_news, upsert_news_many, upsert_notice, upsert_notices,
+    list_cost_records, list_news, list_pipeline_items, prune_news, save_digest_recipient,
+    stats, update_status, upsert_cost_records, upsert_news, upsert_news_many,
+    upsert_notice, upsert_notices, upsert_pipeline_items,
 )
 from .collector import collect_all, collect_news
-from . import expressway, g2b, jiwoncok, kapt, law_news, lh, nuri, official_news
+from . import (
+    expressway, g2b, jiwoncok, kapt, law_news, lh, nuri, official_news,
+    procurement_intelligence,
+)
 from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
 from .jiwoncok import parse_jiwoncok_email
 from .scoring import MIN_NOTICE_SCORE, should_keep_notice
@@ -354,6 +358,12 @@ class Handler(BaseHTTPRequestHandler):
                 prune_news(self.settings.db_path, rows)
             return counts
 
+        def save_pipeline(rows: list[dict]) -> dict[str, int]:
+            return upsert_pipeline_items(self.settings.db_path, rows)
+
+        def save_costs(rows: list[dict]) -> dict[str, int]:
+            return upsert_cost_records(self.settings.db_path, rows)
+
         notice_jobs = (
             ("g2b", "나라장터", lambda: g2b.collect_recent(service_key, effective_lookback)),
             ("nuri", "누리장터", lambda: nuri.collect_recent(service_key, effective_lookback)),
@@ -367,6 +377,16 @@ class Handler(BaseHTTPRequestHandler):
         ]
         if law_key:
             news_jobs.append(("content", "국가법령정보", lambda: law_news.collect_law_news(law_key)))
+        intelligence_jobs = (
+            (
+                "pipeline", "사전 사업정보",
+                lambda: procurement_intelligence.collect_pipeline(service_key, effective_lookback),
+            ),
+            (
+                "cost", "공사비 분석자료",
+                lambda: procurement_intelligence.collect_cost_records(service_key, max(168, effective_lookback)),
+            ),
+        )
         jobs = [
             ("notice", source, collect)
             for scope, source, collect in notice_jobs
@@ -377,6 +397,11 @@ class Handler(BaseHTTPRequestHandler):
             for scope, source, collect in news_jobs
             if scopes is None or scope in scopes
         )
+        jobs.extend(
+            (kind, source, collect)
+            for kind, source, collect in intelligence_jobs
+            if scopes is None or kind in scopes
+        )
         missing_law = not law_key and (scopes is None or "content" in scopes)
         self._update_collection_job(job_id, source_total=len(jobs) + (1 if missing_law else 0))
         if missing_law:
@@ -386,6 +411,7 @@ class Handler(BaseHTTPRequestHandler):
         totals = {
             "total": 0, "inserted": 0, "updated": 0, "unchanged": 0,
             "news_inserted": 0, "news_updated": 0,
+            "pipeline_total": 0, "cost_total": 0,
         }
 
         pool: ThreadPoolExecutor | None = None
@@ -449,12 +475,24 @@ class Handler(BaseHTTPRequestHandler):
                             "source": source, "ok": True, "total": len(relevant),
                             "filtered": len(rows) - len(relevant),
                         })
-                    else:
+                    elif kind == "news":
                         counts = save_news(rows)
                         totals["news_inserted"] += counts["inserted"]
                         totals["news_updated"] += counts["updated"]
                         self._append_collection_source(job_id, {
                             "source": source, "ok": True, "total": len(rows),
+                        })
+                    elif kind == "pipeline":
+                        counts = save_pipeline(rows)
+                        totals["pipeline_total"] += len(rows)
+                        self._append_collection_source(job_id, {
+                            "source": source, "ok": True, "total": len(rows), **counts,
+                        })
+                    else:
+                        counts = save_costs(rows)
+                        totals["cost_total"] += len(rows)
+                        self._append_collection_source(job_id, {
+                            "source": source, "ok": True, "total": len(rows), **counts,
                         })
                     self._update_collection_job(
                         job_id,
@@ -545,6 +583,32 @@ class Handler(BaseHTTPRequestHandler):
                 self.settings.db_path,
                 category=params.get("category", [""])[0],
                 query=params.get("q", [""])[0],
+            ))
+            return
+        if parsed.path == "/api/pipeline":
+            params = parse_qs(parsed.query)
+            try:
+                min_score = int(params.get("min_score", ["40"])[0])
+            except ValueError:
+                min_score = 40
+            self._json(list_pipeline_items(
+                self.settings.db_path,
+                stage=params.get("stage", [""])[0],
+                query=params.get("q", [""])[0],
+                min_score=min_score,
+            ))
+            return
+        if parsed.path == "/api/cost-records":
+            params = parse_qs(parsed.query)
+            try:
+                min_score = int(params.get("min_score", ["40"])[0])
+            except ValueError:
+                min_score = 40
+            self._json(list_cost_records(
+                self.settings.db_path,
+                record_type=params.get("record_type", [""])[0],
+                query=params.get("q", [""])[0],
+                min_score=min_score,
             ))
             return
         if parsed.path == "/api/admin/session":
@@ -734,7 +798,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.settings.service_key,
                 )
                 law_key = get_secret(self.settings.db_path, "law_api_oc")
-                allowed_scopes = {"g2b", "nuri", "lh", "expressway", "kapt", "jiwoncok", "content"}
+                allowed_scopes = {
+                    "g2b", "nuri", "lh", "expressway", "kapt", "jiwoncok",
+                    "content", "pipeline", "cost",
+                }
                 requested_scopes = {
                     value.strip().lower()
                     for value in self.headers.get("X-Collect-Scopes", "").split(",")
@@ -1115,7 +1182,12 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
             # 서버가 먼저 응답 가능 상태가 된 뒤, 비어 있는 임시 DB만 백그라운드에서 복구한다.
             time.sleep(1)
             try:
-                if stats(settings.db_path).get("total", 0) > 0:
+                current_stats = stats(settings.db_path)
+                if (
+                    current_stats.get("total", 0) > 0
+                    and current_stats.get("pipeline_count", 0) > 0
+                    and current_stats.get("cost_count", 0) > 0
+                ):
                     return
                 if not handler.collection_lock.acquire(blocking=False):
                     return
@@ -1127,7 +1199,16 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                 # an unexplained lock/409 failure during startup recovery.
                 runner = object.__new__(handler)
                 runner.settings = settings
-                runner._run_collection_job(job_id, service_key, law_key, settings.lookback_hours)
+                missing_scopes = set()
+                if current_stats.get("total", 0) == 0:
+                    missing_scopes.update({"g2b", "nuri", "lh", "expressway", "kapt", "jiwoncok", "content"})
+                if current_stats.get("pipeline_count", 0) == 0:
+                    missing_scopes.add("pipeline")
+                if current_stats.get("cost_count", 0) == 0:
+                    missing_scopes.add("cost")
+                runner._run_collection_job(
+                    job_id, service_key, law_key, settings.lookback_hours, missing_scopes
+                )
                 job = handler._get_collection_job(job_id) or {}
                 if job.get("ok"):
                     today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
