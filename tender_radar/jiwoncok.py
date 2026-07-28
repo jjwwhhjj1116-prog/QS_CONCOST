@@ -27,6 +27,7 @@ WATCH_KEYWORDS = (
     "기술입찰", "설계공모 심사", "정비사업", "도시계획위원회",
     "공사비 검증", "공사비검증", "공사비 적정성", "개산견적", "실시견적",
     "건축견적", "견적용역", "원가계산", "원가검토", "공사원가",
+    "적산", "공사비 증액", "공사비 협상",
     "물량산출", "수량산출", "내역서", "BOQ", "설계경제성", "VE",
     "설계변경", "클레임", "계약금액 조정", "공사비 분쟁", "정산",
     "물가변동", "물가상승", "에스컬레이션", "ES 검토", "ES 용역",
@@ -54,6 +55,12 @@ BOARD_HINTS = (
 # 정확한 게시판 URL을 아는 곳은 URL을 직접, 모르는 곳은 홈페이지에서 게시판 후보를 찾아 들어간다.
 SOURCE_PAGES = (
     {"institution": "부산광역시", "url": "https://www.busan.go.kr/nbgosi", "direct": "1"},
+    {
+        "institution": "부산광역시 정비사업 통합홈페이지",
+        "url": "https://dynamice.busan.go.kr/view.do?no=287",
+        "direct": "1",
+        "parser": "busan_redevelopment",
+    },
     {"institution": "서울교통공사", "url": "https://www.seoulmetro.co.kr/kr/board.do?menuIdx=546", "direct": "1"},
     {"institution": "창원시", "url": "https://www.changwon.go.kr/cwportal/10310/10438/10439.web"},
     {"institution": "김해시", "url": "https://www.gimhae.go.kr/03360/00023/00024.web"},
@@ -144,6 +151,7 @@ CORE_INSTITUTIONS = {
     "경기도",
     "경기주택도시공사",
     "부산광역시",
+    "부산광역시 정비사업 통합홈페이지",
 }
 
 
@@ -381,6 +389,71 @@ def parse_source_page(html_text: str, base_url: str, institution: str = "") -> l
     return rows
 
 
+def parse_busan_redevelopment_page(
+    html_text: str,
+    base_url: str = "https://dynamice.busan.go.kr/view.do?no=287",
+    institution: str = "부산광역시 정비사업 통합홈페이지",
+) -> list[dict[str, Any]]:
+    """Parse association bids whose identifiers live in ``move_view(...)``.
+
+    The Busan redevelopment board uses ``href="#"`` for every detail page, so
+    the generic link parser correctly ignores those anchors.  This adapter
+    reconstructs the official detail URL from the JavaScript arguments.
+    """
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    anchor_re = re.compile(r'<a\b(?P<attrs>[^>]*)>(?P<body>.*?)</a>', re.I | re.S)
+    onclick_re = re.compile(r'onclick\s*=\s*"(?P<value>[^"]*move_view[^"]*)"', re.I)
+    args_re = re.compile(
+        r"move_view\(\s*'(?P<ntt>\d+)'\s*,\s*'(?P<bbs>[^']+)'\s*,\s*'(?P<area>[^']+)'\s*\)",
+        re.I,
+    )
+    title_re = re.compile(r"<h3\b[^>]*>(?P<title>.*?)</h3>", re.I | re.S)
+    date_re = re.compile(r"등록일\s*:\s*(20\d{2}-\d{2}-\d{2})")
+
+    for anchor in anchor_re.finditer(html_text or ""):
+        onclick = onclick_re.search(anchor.group("attrs"))
+        title_match = title_re.search(anchor.group("body"))
+        if not onclick or not title_match:
+            continue
+        args = args_re.search(html.unescape(onclick.group("value")))
+        if not args or args.group("bbs") != "BBSMSTR_000000000080":
+            continue
+        title = _clean(re.sub(r"<[^>]+>", " ", title_match.group("title")))
+        if not title or not _has_watch_keyword(title):
+            continue
+        ntt_id = args.group("ntt")
+        if ntt_id in seen:
+            continue
+        seen.add(ntt_id)
+        body_text = _clean(re.sub(r"<[^>]+>", " ", anchor.group("body")))
+        published = date_re.search(body_text)
+        target = urljoin(
+            base_url,
+            f"/home/{args.group('area')}/view.do?no=329&pgMode=view&ntt_id={ntt_id}",
+        )
+        score, matched = score_notice(title, institution, "부산", SOURCE)
+        rows.append({
+            "source": SOURCE,
+            "source_key": f"{institution}-{ntt_id}",
+            "category": _category_for(title, matched),
+            "title": title,
+            "institution": institution,
+            "published_at": published.group(1) if published else datetime.now(SEOUL_TZ).date().isoformat(),
+            "deadline_at": "",
+            "estimated_price": None,
+            "region": "부산",
+            "notice_type": "신규",
+            "change_reason": "",
+            "changed_at": "",
+            "url": target,
+            "score": score,
+            "matched_keywords": matched,
+            "raw": {"context": body_text, "source_page": base_url},
+        })
+    return rows
+
+
 def discover_board_urls(html_text: str, base_url: str, limit: int = 3) -> list[str]:
     parser = _AnchorParser()
     parser.feed(html_text or "")
@@ -448,6 +521,12 @@ def active_source_pages() -> list[dict[str, str]]:
 
 def collect_source_page(source: dict[str, str]) -> list[dict[str, Any]]:
     root = _fetch(source["url"])
+    if source.get("parser") == "busan_redevelopment":
+        return parse_busan_redevelopment_page(
+            root,
+            source["url"],
+            source.get("institution", ""),
+        )
     try:
         board_limit = max(0, min(int(os.getenv("JIWONCOK_BOARD_LIMIT", "1")), 3))
     except ValueError:

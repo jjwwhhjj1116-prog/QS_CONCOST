@@ -18,10 +18,11 @@ from tender_radar.g2b import fetch_category, normalize_item
 from tender_radar.expressway import normalize_item as normalize_ex_item
 from tender_radar.lh import normalize_item as normalize_lh_item
 from tender_radar.kapt import normalize_item as normalize_kapt_item, parse_list as parse_kapt_list
+from tender_radar.nuri import normalize_item as normalize_nuri_item
 from tender_radar.industry_news import parse_cerik, parse_constimes, parse_ricon
 from tender_radar.jiwoncok import (
     active_source_pages, collect_recent_with_status, discover_board_urls,
-    parse_jiwoncok_email, parse_source_page,
+    parse_busan_redevelopment_page, parse_jiwoncok_email, parse_source_page,
 )
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
 from tender_radar.secrets_store import get_secret
@@ -270,6 +271,8 @@ class MVPTests(unittest.TestCase):
         }
         low = {"source": "테스트", "title": "도장 시공", "score": MIN_NOTICE_SCORE - 1}
         with patch("tender_radar.collector.g2b.collect_recent", return_value=[high, seoul_safety, non_seoul_safety, low]), patch(
+            "tender_radar.collector.nuri.collect_recent", return_value=[]
+        ), patch(
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
@@ -285,6 +288,8 @@ class MVPTests(unittest.TestCase):
             return [{"source": "나라장터", "title": "공사비 검증", "score": 70}]
 
         with patch("tender_radar.collector.g2b.collect_recent", side_effect=slow_source), patch(
+            "tender_radar.collector.nuri.collect_recent", return_value=[]
+        ), patch(
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
@@ -303,6 +308,8 @@ class MVPTests(unittest.TestCase):
             "score": 70, "matched_keywords": ["공사비 검증"],
         }
         with patch("tender_radar.collector.g2b.collect_recent", return_value=[]), patch(
+            "tender_radar.collector.nuri.collect_recent", return_value=[]
+        ), patch(
             "tender_radar.collector.lh.collect_recent", return_value=[]
         ), patch("tender_radar.collector.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.collector.kapt.collect_recent", return_value=[]
@@ -330,6 +337,8 @@ class MVPTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
             "os.environ", {"COLLECTION_JOB_TIMEOUT_SECONDS": "0.25"}
         ), patch("tender_radar.server.g2b.collect_recent", side_effect=fast_notice), patch(
+            "tender_radar.server.nuri.collect_recent", return_value=[]
+        ), patch(
             "tender_radar.server.lh.collect_recent", side_effect=slow_source
         ), patch("tender_radar.server.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.server.kapt.collect_recent", return_value=[]
@@ -390,6 +399,8 @@ class MVPTests(unittest.TestCase):
                 "COLLECTION_SWEEP_TIMEOUT_SECONDS": "0.2",
             },
         ), patch("tender_radar.server.g2b.collect_recent", return_value=[]), patch(
+            "tender_radar.server.nuri.collect_recent", return_value=[]
+        ), patch(
             "tender_radar.server.lh.collect_recent", return_value=[]
         ), patch("tender_radar.server.expressway.collect_recent", return_value=[]), patch(
             "tender_radar.server.kapt.collect_recent", return_value=[]
@@ -615,6 +626,23 @@ class MVPTests(unittest.TestCase):
         rows = parse_source_page(page, "https://www.example.go.kr/", "서울특별시")
         self.assertEqual([row["title"] for row in rows], ["서울 청사 공사비 검증 용역 공고"])
 
+    def test_parse_busan_redevelopment_cost_review_bid(self):
+        page = """
+        <li>
+          <a href="#" onClick="javascript:move_view('20154', 'BBSMSTR_000000000080', 'BARA_0000000000163')">
+            <h3 class="b-tit new">범일3-1구역 공사비 협상을 위한 적산 및 공사비 증액 적정성 검토 등 용역업체 선정 입찰공고</h3>
+            <div><span>등록일 : 2026-07-22</span><span>등록자 : 양승호</span></div>
+          </a>
+        </li>
+        """
+        rows = parse_busan_redevelopment_page(page)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["published_at"], "2026-07-22")
+        self.assertEqual(rows[0]["region"], "부산")
+        self.assertIn("ntt_id=20154", rows[0]["url"])
+        self.assertGreaterEqual(rows[0]["score"], MIN_NOTICE_SCORE)
+        self.assertTrue(should_keep_notice(rows[0]))
+
     def test_discover_jiwoncok_board_urls(self):
         page = """
         <a href="/intro">기관소개</a>
@@ -630,9 +658,10 @@ class MVPTests(unittest.TestCase):
     def test_jiwoncok_defaults_to_small_core_source_set(self):
         with patch.dict("os.environ", {}, clear=True):
             rows = active_source_pages()
-        self.assertLessEqual(len(rows), 8)
+        self.assertLessEqual(len(rows), 9)
         self.assertIn("경기신용보증재단", {row["institution"] for row in rows})
         self.assertIn("서울교통공사", {row["institution"] for row in rows})
+        self.assertIn("부산광역시 정비사업 통합홈페이지", {row["institution"] for row in rows})
 
     def test_jiwoncok_extended_mode_can_restore_full_source_set(self):
         with patch.dict("os.environ", {"JIWONCOK_SOURCE_MODE": "extended"}, clear=True):
@@ -770,6 +799,19 @@ class MVPTests(unittest.TestCase):
         notice = normalize_lh_item({"bidNum": "2600001", "bidnmKor": "공사비 검증 용역", "cstrtnJobGbNm": "용역", "bidKind": "정정공고"})
         self.assertEqual(notice["source"], "LH")
         self.assertEqual(notice["notice_type"], "개정")
+
+    def test_normalize_nuri_redevelopment_cost_bid(self):
+        notice = normalize_nuri_item({
+            "bidNtceNo": "PRVT-20154",
+            "bidNtceOrd": "000",
+            "bidNtceNm": "범일3-1구역 공사비 협상을 위한 적산 및 공사비 증액 적정성 검토 등 용역업체 선정 입찰공고",
+            "ntceInsttNm": "범일3-1구역 도시환경정비사업조합",
+            "bidNtceDt": "2026-07-22 10:00:00",
+            "bidNtceDtlUrl": "https://www.g2b.go.kr/example",
+        }, "용역")
+        self.assertEqual(notice["source"], "누리장터")
+        self.assertGreaterEqual(notice["score"], MIN_NOTICE_SCORE)
+        self.assertTrue(should_keep_notice(notice))
 
     def test_parse_and_normalize_kapt_notice(self):
         html = """<table><tbody><tr class='notice-row'>

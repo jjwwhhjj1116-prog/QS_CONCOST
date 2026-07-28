@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import TimeoutError, ThreadPoolExecutor, as_completed
 from typing import Any
 
-from . import expressway, g2b, jiwoncok, kapt, law_news, lh, official_news
+from . import expressway, g2b, jiwoncok, kapt, law_news, lh, nuri, official_news
 from .scoring import should_keep_notice
 
 
@@ -52,6 +52,7 @@ def collect_all(
     notices: list[dict[str, Any]] = []
     collectors = (
         ("나라장터", lambda: g2b.collect_recent(service_key, lookback_hours)),
+        ("누리장터", lambda: nuri.collect_recent(service_key, lookback_hours)),
         ("LH", lambda: lh.collect_recent(service_key, lookback_hours)),
         ("도로공사", lambda: expressway.collect_recent(lookback_hours)),
         ("공동주택관리정보시스템", lambda: kapt.collect_recent(lookback_hours)),

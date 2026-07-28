@@ -27,7 +27,7 @@ from .db import (
     upsert_news, upsert_news_many, upsert_notice, upsert_notices,
 )
 from .collector import collect_all, collect_news
-from . import expressway, g2b, jiwoncok, kapt, law_news, lh, official_news
+from . import expressway, g2b, jiwoncok, kapt, law_news, lh, nuri, official_news
 from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
 from .jiwoncok import parse_jiwoncok_email
 from .scoring import MIN_NOTICE_SCORE, should_keep_notice
@@ -356,6 +356,7 @@ class Handler(BaseHTTPRequestHandler):
 
         notice_jobs = (
             ("g2b", "나라장터", lambda: g2b.collect_recent(service_key, effective_lookback)),
+            ("nuri", "누리장터", lambda: nuri.collect_recent(service_key, effective_lookback)),
             ("lh", "LH", lambda: lh.collect_recent(service_key, effective_lookback)),
             ("expressway", "도로공사", lambda: expressway.collect_recent(effective_lookback)),
             ("kapt", "공동주택관리정보시스템", lambda: kapt.collect_recent(effective_lookback)),
@@ -733,7 +734,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.settings.service_key,
                 )
                 law_key = get_secret(self.settings.db_path, "law_api_oc")
-                allowed_scopes = {"g2b", "lh", "expressway", "kapt", "jiwoncok", "content"}
+                allowed_scopes = {"g2b", "nuri", "lh", "expressway", "kapt", "jiwoncok", "content"}
                 requested_scopes = {
                     value.strip().lower()
                     for value in self.headers.get("X-Collect-Scopes", "").split(",")
