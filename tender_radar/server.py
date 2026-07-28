@@ -391,20 +391,23 @@ class Handler(BaseHTTPRequestHandler):
                 lambda: procurement_intelligence.collect_cost_records(service_key, max(168, effective_lookback)),
             ),
         )
+        # Put the two new API-backed datasets first. On an empty Render volume
+        # a bounded startup sweep must not leave them queued behind slow legacy
+        # institution scrapers.
         jobs = [
+            (kind, source, collect)
+            for kind, source, collect in intelligence_jobs
+            if scopes is not None and kind in scopes
+        ]
+        jobs.extend([
             ("notice", source, collect)
             for scope, source, collect in notice_jobs
             if scopes is None or scope in scopes
-        ]
+        ])
         jobs.extend(
             ("news", source, collect)
             for scope, source, collect in news_jobs
             if scopes is None or scope in scopes
-        )
-        jobs.extend(
-            (kind, source, collect)
-            for kind, source, collect in intelligence_jobs
-            if scopes is None or kind in scopes
         )
         missing_law = not law_key and (scopes is None or "content" in scopes)
         self._update_collection_job(job_id, source_total=len(jobs) + (1 if missing_law else 0))
@@ -1038,7 +1041,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         worker = threading.Thread(
             target=self._run_collection_job,
-            args=(job_id, service_key, law_key, lookback_hours),
+            args=(
+                job_id,
+                service_key,
+                law_key,
+                lookback_hours,
+                {
+                    "pipeline", "cost", "g2b", "nuri", "lh", "expressway",
+                    "kapt", "jiwoncok", "content",
+                },
+            ),
             name=f"collection-{job_id}",
             daemon=True,
         )
