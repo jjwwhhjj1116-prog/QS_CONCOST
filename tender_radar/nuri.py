@@ -12,6 +12,7 @@ from .scoring import MIN_NOTICE_SCORE, score_notice
 
 
 BASE_URL = "https://apis.data.go.kr/1230000/ao/PrvtBidNtceService"
+DETAIL_URL = "https://www.g2b.go.kr/link/PNPE027_01/single/"
 OPERATIONS = {
     "용역": "getPrvtBidPblancListInfoServc",
     "공사": "getPrvtBidPblancListInfoCnstwk",
@@ -36,6 +37,18 @@ def _money(value: Any) -> int | None:
         return int(float(str(value).replace(",", "")))
     except (TypeError, ValueError):
         return None
+
+
+def _detail_url(item: dict[str, Any], notice_no: str, order: str) -> str:
+    supplied = str(_pick(item, "bidNtceDtlUrl", "bidNtceUrl", "bidPbancDtlUrl"))
+    if supplied:
+        return supplied
+    if not notice_no or notice_no == "unknown":
+        return ""
+    # The private-bid API frequently omits its URL even though the notice is
+    # published in the same next-generation G2B detail viewer. The stable
+    # notice number/order link resolves both public and Nuri private notices.
+    return f"{DETAIL_URL}?{urlencode({'bidPbancNo': notice_no, 'bidPbancOrd': order})}"
 
 
 def normalize_item(item: dict[str, Any], category: str) -> dict[str, Any]:
@@ -70,7 +83,7 @@ def normalize_item(item: dict[str, Any], category: str) -> dict[str, Any]:
         "notice_type": notice_type,
         "change_reason": str(_pick(item, "chgNtceRsn")),
         "changed_at": str(_pick(item, "chgDt", "rgstDt")) if notice_type != "신규" else "",
-        "url": str(_pick(item, "bidNtceDtlUrl", "bidNtceUrl", "bidPbancDtlUrl")),
+        "url": _detail_url(item, notice_no, order),
         "score": score,
         "matched_keywords": matched,
         "raw": item,

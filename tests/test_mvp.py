@@ -911,6 +911,18 @@ class MVPTests(unittest.TestCase):
         self.assertGreaterEqual(notice["score"], MIN_NOTICE_SCORE)
         self.assertTrue(should_keep_notice(notice))
 
+    def test_normalize_nuri_builds_g2b_detail_url_when_api_omits_it(self):
+        notice = normalize_nuri_item({
+            "bidNtceNo": "R26BK01654923",
+            "bidNtceOrd": "000",
+            "bidNtceNm": "이문3구역 건설사업정산 및 건축시공 적정성 검토 업체 입찰 공고",
+        }, "용역")
+        self.assertEqual(
+            notice["url"],
+            "https://www.g2b.go.kr/link/PNPE027_01/single/"
+            "?bidPbancNo=R26BK01654923&bidPbancOrd=000",
+        )
+
     def test_parse_and_normalize_kapt_notice(self):
         html = """<table><tbody><tr class='notice-row'>
         <td onclick=\"goView('20260707125216962')\">1</td><td>K-APT</td><td>최저 낙찰</td>
