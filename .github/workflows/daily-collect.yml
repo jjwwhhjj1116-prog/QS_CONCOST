@@ -22,11 +22,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Check out external collectors
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Trigger one bounded collection sweep
         env:
           DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
           SCHEDULED_RUN: ${{ github.event_name == 'schedule' }}
           MANUAL_SCOPES: ${{ inputs.scopes }}
+          TZ: Asia/Seoul
         run: |
           test -n "$DIGEST_TRIGGER_TOKEN"
           collect_scopes="$MANUAL_SCOPES"
@@ -43,16 +52,34 @@ jobs:
               *)  collect_scopes="g2b" ;;
             esac
           fi
-          echo "Collection scopes: ${collect_scopes:-all}"
-          http_code=$(curl --silent --show-error --max-time 90 \
-            --output /tmp/collect-response.json --write-out "%{http_code}" \
-            -X POST \
-            -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN" \
-            -H "X-Collect-Scheduled: $SCHEDULED_RUN" \
-            -H "X-Collect-Scopes: $collect_scopes" \
-            https://qs-concost.onrender.com/api/automation/collect)
-          cat /tmp/collect-response.json
-          if [ "$http_code" != "200" ] && [ "$http_code" != "202" ] && [ "$http_code" != "409" ]; then
-            echo "Unexpected collection response: HTTP $http_code"
-            exit 1
+          external_jiwoncok=false
+          web_scopes=""
+          IFS=',' read -ra parts <<< "$collect_scopes"
+          for scope in "${parts[@]}"; do
+            if [ "$scope" = "jiwoncok" ]; then
+              external_jiwoncok=true
+            elif [ -n "$scope" ]; then
+              web_scopes="${web_scopes:+$web_scopes,}$scope"
+            fi
+          done
+
+          if [ -n "$web_scopes" ]; then
+            echo "Render collection scopes: $web_scopes"
+            http_code=$(curl --silent --show-error --max-time 90 \
+              --output /tmp/collect-response.json --write-out "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN" \
+              -H "X-Collect-Scheduled: $SCHEDULED_RUN" \
+              -H "X-Collect-Scopes: $web_scopes" \
+              https://qs-concost.onrender.com/api/automation/collect)
+            cat /tmp/collect-response.json
+            if [ "$http_code" != "200" ] && [ "$http_code" != "202" ] && [ "$http_code" != "409" ]; then
+              echo "Unexpected collection response: HTTP $http_code"
+              exit 1
+            fi
+          fi
+
+          if [ "$external_jiwoncok" = "true" ]; then
+            echo "JiwonCOK collection runs on the GitHub worker."
+            python -m tender_radar.jiwoncok_worker
           fi

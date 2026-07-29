@@ -12,11 +12,12 @@ from typing import Any
 from urllib.parse import unquote, urljoin
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from .scoring import score_notice, should_keep_notice
 
 
-SEOUL_TZ = datetime.now().astimezone().tzinfo
+SEOUL_TZ = ZoneInfo("Asia/Seoul")
 SOURCE = "지원COK"
 LINK_RE = re.compile(r"\[([^\]]{8,240})\]\((https?://[^\s)]+)\)")
 DATE_RE = re.compile(r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})")

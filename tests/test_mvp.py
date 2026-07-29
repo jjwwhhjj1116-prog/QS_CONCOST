@@ -169,6 +169,57 @@ class MVPTests(unittest.TestCase):
             self.assertTrue(send_mock.call_args.kwargs["idempotency_key"].startswith("concost-daily-digest-"))
             collect_mock.assert_not_called()
 
+    def test_render_never_runs_jiwoncok_inside_web_process(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ",
+            {"DIGEST_TRIGGER_TOKEN": "automation-token", "RENDER": "true"},
+            clear=True,
+        ), patch("tender_radar.server.threading.Thread") as thread_mock:
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            handler.path = "/api/automation/collect"
+            handler.headers = {
+                "Authorization": "Bearer automation-token",
+                "X-Collect-Scopes": "jiwoncok",
+            }
+            responses = []
+            handler._json = lambda payload, status=200: responses.append((payload, status))
+            handler.do_POST()
+            self.assertTrue(responses[0][0]["skipped"])
+            self.assertIn("외부 분리", responses[0][0]["reason"])
+            thread_mock.assert_not_called()
+            self.assertFalse(Handler.collection_lock.locked())
+
+    def test_external_jiwoncok_import_is_token_protected_and_bulk_saved(self):
+        row = {
+            "source": "지원COK",
+            "source_key": "external-1",
+            "category": "용역",
+            "title": "공사비 검증 용역",
+            "institution": "서울특별시",
+            "score": 80,
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
+        ), patch(
+            "tender_radar.server.upsert_notices",
+            return_value={"inserted": 1, "updated": 0, "unchanged": 0},
+        ) as save_mock:
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            handler.path = "/api/automation/import-jiwoncok"
+            handler.headers = {"Authorization": "Bearer automation-token"}
+            handler._read_json = lambda *_: {"rows": [row], "sources": []}
+            responses = []
+            handler._json = lambda payload, status=200: responses.append((payload, status))
+            handler.do_POST()
+            self.assertEqual(responses[0][0]["inserted"], 1)
+            save_mock.assert_called_once_with(db, [row])
+
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
         self.assertGreaterEqual(score, 70)

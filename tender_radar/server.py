@@ -143,12 +143,16 @@ def storage_is_persistent(db_path: Path) -> bool:
     return False
 
 
+def is_render_runtime() -> bool:
+    return bool(os.getenv("RENDER", "").strip() or os.getenv("RENDER_SERVICE_ID", "").strip())
+
+
 def auto_collect_on_start_enabled() -> bool:
     # Never run a multi-source recovery sweep inside a Render web process.
     # Timed-out collector threads cannot be force-stopped in Python; starting a
     # second daily sweep immediately afterward can exhaust a Free instance and
     # make its health check return 502. GitHub's split sweeps refill production.
-    if os.getenv("RENDER", "").strip() or os.getenv("RENDER_SERVICE_ID", "").strip():
+    if is_render_runtime():
         return False
     configured = os.getenv("AUTO_COLLECT_ON_START", "").strip().lower()
     if configured:
@@ -820,12 +824,40 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if parsed.path == "/api/automation/collect":
+        if parsed.path in {"/api/automation/collect", "/api/automation/import-jiwoncok"}:
             expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
             supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
             if not expected or not secrets.compare_digest(expected, supplied):
                 self._json({"error": "인증되지 않은 자동화 요청입니다."}, 401)
                 return
+        if parsed.path == "/api/automation/import-jiwoncok":
+            try:
+                payload = self._read_json(2_000_000)
+                supplied_rows = payload.get("rows", [])
+                if not isinstance(supplied_rows, list):
+                    raise ValueError("rows must be a list")
+                rows = [
+                    row for row in supplied_rows[:500]
+                    if isinstance(row, dict)
+                    and row.get("source") == "지원COK"
+                    and row.get("source_key")
+                    and row.get("title")
+                    and should_keep_notice(row)
+                ]
+                counts = upsert_notices(self.settings.db_path, rows)
+                sources = payload.get("sources", [])
+                self._json({
+                    "ok": True,
+                    "total": len(rows),
+                    "filtered": len(supplied_rows) - len(rows),
+                    "sources": sources[:100] if isinstance(sources, list) else [],
+                    **counts,
+                })
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._json({"error": str(exc)}, 502)
+            return
         if parsed.path == "/api/automation/digest":
             expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
             supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
@@ -869,7 +901,18 @@ class Handler(BaseHTTPRequestHandler):
                     for value in self.headers.get("X-Collect-Scopes", "").split(",")
                     if value.strip()
                 }
+                original_requested_scopes = set(requested_scopes)
+                if is_render_runtime():
+                    requested_scopes.discard("jiwoncok")
                 scopes = requested_scopes & allowed_scopes or None
+                if original_requested_scopes and not requested_scopes:
+                    self.collection_lock.release()
+                    self._json({
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "지원COK은 외부 분리 수집기로 실행됩니다.",
+                    })
+                    return
                 job_id = type(self)._create_collection_job("09:00 예약 자료 수집을 시작했습니다.")
                 worker = threading.Thread(
                     target=self._run_scheduled_collection_job,
@@ -1020,6 +1063,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/admin/collect-jiwoncok":
             if not self._require_admin():
                 return
+            if is_render_runtime():
+                self._json({
+                    "error": "지원COK은 웹사이트 보호를 위해 GitHub 외부 분리 수집기로 자동 갱신됩니다."
+                }, 409)
+                return
             if not self.collection_lock.acquire(blocking=False):
                 self._json({"error": "전체 자료수집이 진행 중입니다. 완료 후 다시 실행하세요."}, 409)
                 return
@@ -1118,7 +1166,7 @@ class Handler(BaseHTTPRequestHandler):
                 lookback_hours,
                 {
                     "pipeline", "cost", "g2b", "nuri", "lh", "expressway",
-                    "kwater", "kapt", "jiwoncok", "content",
+                    "kwater", "kapt", "content",
                 },
             ),
             name=f"collection-{job_id}",
