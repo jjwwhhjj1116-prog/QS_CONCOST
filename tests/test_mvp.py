@@ -53,7 +53,7 @@ class MVPTests(unittest.TestCase):
 
     def test_render_startup_recovery_respects_explicit_setting(self):
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "true"}, clear=True):
-            self.assertTrue(auto_collect_on_start_enabled())
+            self.assertFalse(auto_collect_on_start_enabled())
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "false"}, clear=True):
             self.assertFalse(auto_collect_on_start_enabled())
 

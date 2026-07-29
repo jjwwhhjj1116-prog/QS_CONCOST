@@ -13,7 +13,7 @@ services:
       - key: AUTO_COLLECT_INTERVAL_MINUTES
         value: 0
       - key: AUTO_COLLECT_ON_START
-        value: "true"
+        value: "false"
       # The free web instance can restart with an empty local SQLite volume.
       # Rebuilding a full week keeps the opportunity screen useful after a restart.
       - key: LOOKBACK_HOURS

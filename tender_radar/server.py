@@ -144,18 +144,16 @@ def storage_is_persistent(db_path: Path) -> bool:
 
 
 def auto_collect_on_start_enabled() -> bool:
-    # Startup recovery only runs when the database is empty and it shares the
-    # same process-wide collection lock as manual/scheduled collection. It is
-    # therefore safe on Render and prevents a deploy/restart from leaving the
-    # dashboard empty until the next day's external schedule.
+    # Never run a multi-source recovery sweep inside a Render web process.
+    # Timed-out collector threads cannot be force-stopped in Python; starting a
+    # second daily sweep immediately afterward can exhaust a Free instance and
+    # make its health check return 502. GitHub's split sweeps refill production.
+    if os.getenv("RENDER", "").strip() or os.getenv("RENDER_SERVICE_ID", "").strip():
+        return False
     configured = os.getenv("AUTO_COLLECT_ON_START", "").strip().lower()
     if configured:
         return configured in {"1", "true", "yes"}
-    # Existing Render services created before this variable was added to the
-    # Blueprint do not automatically receive the new key. Render always exposes
-    # its own platform marker, so an empty deployment still recovers without an
-    # administrator opening the site.
-    return bool(os.getenv("RENDER", "").strip() or os.getenv("RENDER_SERVICE_ID", "").strip())
+    return False
 
 
 def internal_scheduler_enabled() -> bool:
@@ -1319,40 +1317,11 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
     if internal_scheduler_enabled():
         def scheduled_jobs() -> None:
             timezone = ZoneInfo("Asia/Seoul")
-            runner = object.__new__(handler)
-            runner.settings = settings
             while True:
                 now = datetime.now(timezone)
                 today = now.date().isoformat()
-                if in_collect_window(now):
-                    last = get_setting(settings.db_path, "last_scheduled_collect", "")
-                    if last != today and Handler.collection_lock.acquire(blocking=False):
-                        try:
-                            service_key = get_secret(
-                                settings.db_path, "public_data_api_key", settings.service_key
-                            )
-                            law_key = get_secret(settings.db_path, "law_api_oc")
-                            job_id = handler._create_collection_job(
-                                "내부 예약기가 오늘 자료를 자동 수집하고 있습니다."
-                            )
-                            runner._run_scheduled_collection_job(
-                                job_id,
-                                service_key,
-                                law_key,
-                                settings.lookback_hours,
-                                today,
-                                {
-                                    "g2b", "nuri", "lh", "expressway", "kwater",
-                                    "kapt", "jiwoncok", "content",
-                                },
-                            )
-                        except Exception as exc:
-                            print(f"09:00 예약수집 실패: {exc}")
-                            Handler.collection_lock_owner = None
-                            try:
-                                Handler.collection_lock.release()
-                            except RuntimeError:
-                                pass
+                # Collection is intentionally excluded from this web-process
+                # scheduler. GitHub triggers small, isolated source groups.
                 if in_digest_window(now):
                     last = get_setting(settings.db_path, "last_automation_digest", "")
                     enabled = get_setting(settings.db_path, "digest_enabled", "1") == "1"
