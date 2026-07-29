@@ -90,6 +90,10 @@ def manual_collection_scopes() -> set[str]:
     }
 
 
+def is_manual_safe_collection(scopes: set[str] | None) -> bool:
+    return scopes is not None and scopes == manual_collection_scopes()
+
+
 def effective_collection_lookback_hours(
     requested_hours: int,
     now_kst: datetime | None = None,
@@ -475,7 +479,12 @@ class Handler(BaseHTTPRequestHandler):
 
         pool: ThreadPoolExecutor | None = None
         try:
-            sweep_timeout = collection_sweep_timeout_seconds()
+            manual_safe_mode = is_manual_safe_collection(scopes)
+            sweep_timeout = (
+                min(120.0, collection_job_timeout_seconds())
+                if manual_safe_mode
+                else collection_sweep_timeout_seconds()
+            )
             deadline = time.monotonic() + sweep_timeout
             self._update_collection_job(
                 job_id,
@@ -487,10 +496,11 @@ class Handler(BaseHTTPRequestHandler):
                 ),
             )
             max_workers = min(max(1, len(jobs)), collection_max_workers())
-            if scopes is not None and {"pipeline", "cost"} & scopes:
+            if manual_safe_mode or (scopes is not None and {"pipeline", "cost"} & scopes):
                 # Pipeline/cost collectors already fan out internally. Running
-                # both at once can exceed a Render Free instance's memory and
-                # make the web health check return 502 during startup recovery.
+                # nested collectors at the same time can exceed a Render Free
+                # instance's memory. The admin full refresh is deliberately
+                # serial as well so one click cannot restart the web service.
                 max_workers = 1
             pool = ThreadPoolExecutor(
                 max_workers=max_workers,
