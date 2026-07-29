@@ -32,7 +32,7 @@ from tender_radar.server import (
     Handler, auto_collect_on_start_enabled, collection_max_workers,
     collection_sweep_timeout_seconds, digest_failure_code,
     effective_collection_lookback_hours, internal_scheduler_enabled, in_collect_window,
-    in_digest_send_window, in_digest_window,
+    in_digest_send_window, in_digest_window, manual_collection_scopes,
 )
 
 
@@ -56,6 +56,15 @@ class MVPTests(unittest.TestCase):
             self.assertFalse(auto_collect_on_start_enabled())
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "false"}, clear=True):
             self.assertFalse(auto_collect_on_start_enabled())
+
+    def test_manual_collection_prioritizes_opportunities_over_heavy_analysis(self):
+        scopes = manual_collection_scopes()
+        self.assertIn("g2b", scopes)
+        self.assertIn("nuri", scopes)
+        self.assertIn("content", scopes)
+        self.assertNotIn("pipeline", scopes)
+        self.assertNotIn("cost", scopes)
+        self.assertNotIn("jiwoncok", scopes)
 
     def test_render_scheduler_respects_explicit_setting(self):
         with patch.dict("os.environ", {"RENDER": "true", "SCHEDULE_JOBS": "true"}, clear=True):

@@ -77,6 +77,19 @@ def collection_max_workers() -> int:
     return max(1, min(value, 3))
 
 
+def manual_collection_scopes() -> set[str]:
+    """Keep the dashboard's one-click refresh focused and bounded.
+
+    Pipeline/cost collectors fan out internally and previously occupied the
+    only Render worker until the 55-second deadline. That left every bid and
+    news collector queued, so the UI misleadingly showed pipeline data while
+    all opportunity counts stayed at zero.
+    """
+    return {
+        "g2b", "nuri", "lh", "expressway", "kwater", "kapt", "content",
+    }
+
+
 def effective_collection_lookback_hours(
     requested_hours: int,
     now_kst: datetime | None = None,
@@ -430,23 +443,23 @@ class Handler(BaseHTTPRequestHandler):
                 lambda: procurement_intelligence.collect_cost_records(service_key, max(168, effective_lookback)),
             ),
         )
-        # Put the two new API-backed datasets first. On an empty Render volume
-        # a bounded startup sweep must not leave them queued behind slow legacy
-        # institution scrapers.
+        # Live opportunities and today's news always take precedence. Heavy
+        # pipeline/cost expansion is appended last so it can never consume the
+        # entire bounded sweep before bid sources have even started.
         jobs = [
-            (kind, source, collect)
-            for kind, source, collect in intelligence_jobs
-            if scopes is not None and kind in scopes
-        ]
-        jobs.extend([
             ("notice", source, collect)
             for scope, source, collect in notice_jobs
             if scopes is None or scope in scopes
-        ])
+        ]
         jobs.extend(
             ("news", source, collect)
             for scope, source, collect in news_jobs
             if scopes is None or scope in scopes
+        )
+        jobs.extend(
+            (kind, source, collect)
+            for kind, source, collect in intelligence_jobs
+            if scopes is not None and kind in scopes
         )
         missing_law = not law_key and (scopes is None or "content" in scopes)
         self._update_collection_job(job_id, source_total=len(jobs) + (1 if missing_law else 0))
@@ -1164,10 +1177,7 @@ class Handler(BaseHTTPRequestHandler):
                 service_key,
                 law_key,
                 lookback_hours,
-                {
-                    "pipeline", "cost", "g2b", "nuri", "lh", "expressway",
-                    "kwater", "kapt", "content",
-                },
+                manual_collection_scopes(),
             ),
             name=f"collection-{job_id}",
             daemon=True,
