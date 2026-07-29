@@ -100,17 +100,20 @@ def is_kst_weekday(now: datetime) -> bool:
 
 def in_collect_window(now: datetime) -> bool:
     minute = now.hour * 60 + now.minute
-    return is_kst_weekday(now) and 9 * 60 <= minute < 10 * 60
+    # GitHub schedules can be delayed. Accept delayed weekday collection
+    # triggers during business hours instead of silently skipping the day.
+    return is_kst_weekday(now) and 9 * 60 <= minute < 18 * 60
 
 
 def in_digest_window(now: datetime) -> bool:
     minute = now.hour * 60 + now.minute
-    return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 10
+    # Send at 10:00 when the service is awake. If a free Render instance wakes
+    # later, send the missed digest once rather than losing the whole day.
+    return is_kst_weekday(now) and 10 * 60 <= minute < 24 * 60
 
 
 def in_digest_send_window(now: datetime) -> bool:
-    minute = now.hour * 60 + now.minute
-    return is_kst_weekday(now) and 10 * 60 <= minute < 10 * 60 + 15
+    return in_digest_window(now)
 
 
 def storage_is_persistent(db_path: Path) -> bool:
@@ -813,7 +816,7 @@ class Handler(BaseHTTPRequestHandler):
             if scheduled_collect and not in_collect_window(now_kst):
                 self._json({
                     "ok": True, "skipped": True,
-                    "reason": f"예약 수집 허용시간(평일 09:00~09:59)이 아닙니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
+                    "reason": f"예약 수집 허용시간(평일 09:00~17:59)이 아닙니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
                 })
                 return
             if not self.collection_lock.acquire(blocking=False):
@@ -880,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
             if scheduled_digest and not in_digest_send_window(now_kst):
                 self._json({
                     "ok": True, "skipped": True,
-                    "reason": f"예약 메일 허용시간(평일 10:00~10:14)이 아닙니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
+                    "reason": f"예약 메일 허용시간(평일 10:00 이후)이 아닙니다. 현재 한국시간 {now_kst:%Y-%m-%d %H:%M}",
                 })
                 return
             today = now_kst.date().isoformat()
@@ -1255,10 +1258,8 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                 runner._run_collection_job(
                     job_id, service_key, law_key, settings.lookback_hours, missing_scopes
                 )
-                job = handler._get_collection_job(job_id) or {}
-                if job.get("ok"):
-                    today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
-                    set_setting(settings.db_path, "last_scheduled_collect", today)
+                # Startup recovery only rebuilds an empty/ephemeral database.
+                # It must not mark the actual 09:00 daily collection complete.
             except Exception as exc:
                 print(f"시작 시 자료복구 실패: {exc}")
                 handler.collection_lock_owner = None
@@ -1275,8 +1276,9 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
         restore_worker.start()
     if internal_scheduler_enabled():
         def scheduled_jobs() -> None:
-            from .cli import collect
             timezone = ZoneInfo("Asia/Seoul")
+            runner = object.__new__(handler)
+            runner.settings = settings
             while True:
                 now = datetime.now(timezone)
                 today = now.date().isoformat()
@@ -1284,22 +1286,49 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                     last = get_setting(settings.db_path, "last_scheduled_collect", "")
                     if last != today and Handler.collection_lock.acquire(blocking=False):
                         try:
-                            set_setting(settings.db_path, "last_scheduled_collect", today)
-                            collect()
+                            service_key = get_secret(
+                                settings.db_path, "public_data_api_key", settings.service_key
+                            )
+                            law_key = get_secret(settings.db_path, "law_api_oc")
+                            job_id = handler._create_collection_job(
+                                "내부 예약기가 오늘 자료를 자동 수집하고 있습니다."
+                            )
+                            runner._run_scheduled_collection_job(
+                                job_id,
+                                service_key,
+                                law_key,
+                                settings.lookback_hours,
+                                today,
+                                {
+                                    "g2b", "nuri", "lh", "expressway", "kwater",
+                                    "kapt", "jiwoncok", "content",
+                                },
+                            )
                         except Exception as exc:
                             print(f"09:00 예약수집 실패: {exc}")
-                        finally:
-                            Handler.collection_lock.release()
+                            Handler.collection_lock_owner = None
+                            try:
+                                Handler.collection_lock.release()
+                            except RuntimeError:
+                                pass
                 if in_digest_window(now):
                     last = get_setting(settings.db_path, "last_automation_digest", "")
                     enabled = get_setting(settings.db_path, "digest_enabled", "1") == "1"
-                    if enabled and last != today and Handler.digest_lock.acquire(blocking=False):
+                    collecting = Handler.collection_lock.locked()
+                    if (
+                        enabled and last != today and not collecting
+                        and Handler.digest_lock.acquire(blocking=False)
+                    ):
                         try:
-                            send_email_digest(
-                                settings.db_path,
-                                idempotency_key=f"concost-daily-digest-{today}",
-                            )
-                            set_setting(settings.db_path, "last_automation_digest", today)
+                            preview = build_email_digest(settings.db_path)
+                            if sum(int(value) for value in preview["counts"].values()) > 0:
+                                send_email_digest(
+                                    settings.db_path,
+                                    idempotency_key=f"concost-daily-digest-{today}",
+                                )
+                                set_setting(settings.db_path, "last_automation_digest", today)
+                            else:
+                                print("10:00 예약메일 보류: 수집된 요약 자료가 아직 0건입니다.")
                         except Exception as exc:
                             print(f"10:00 예약메일 실패: {exc}")
                         finally:

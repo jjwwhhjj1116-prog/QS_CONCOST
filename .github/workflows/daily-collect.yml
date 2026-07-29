@@ -3,8 +3,9 @@ name: CONCOST weekday data collection
 on:
   schedule:
     # Six independent sweeps are more resilient than one 55-minute job.
-    # GitHub cron uses UTC. 00:00~00:50 UTC = 09:00~09:50 Asia/Seoul.
-    - cron: "0,10,20,30,40,50 0 * * 1-5"
+    # Avoid the busiest exact top-of-hour minute. UTC 00:03~00:53 is
+    # 09:03~09:53 Asia/Seoul. Delayed runs remain valid until 18:00 KST.
+    - cron: "3,13,23,33,43,53 0 * * 1-5"
   workflow_dispatch:
     inputs:
       scopes:

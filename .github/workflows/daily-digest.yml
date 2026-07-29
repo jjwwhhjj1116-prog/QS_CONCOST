@@ -2,11 +2,11 @@ name: CONCOST weekday email digest
 
 on:
   schedule:
-    # Start before 10:00 and retry afterward. The API and Resend idempotency key
-    # guarantee one delivery per KST date even when more than one trigger runs.
-    - cron: "50 0 * * 1-5"
-    - cron: "55 0 * * 1-5"
-    - cron: "0,5,10 1 * * 1-5"
+    # Wake shortly before 10:00 and retry at off-peak minutes afterward.
+    # Delayed runs remain valid for the rest of the KST weekday; the DB marker
+    # and Resend idempotency key still permit only one delivery.
+    - cron: "53,58 0 * * 1-5"
+    - cron: "3,8,18,28 1 * * 1-5"
   workflow_dispatch:
 
 concurrency:
