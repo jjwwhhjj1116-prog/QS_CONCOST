@@ -165,6 +165,19 @@ def internal_scheduler_enabled() -> bool:
     return os.getenv("SCHEDULE_JOBS", "1").strip().lower() in {"1", "true", "yes"}
 
 
+def digest_failure_code(exc: Exception) -> str:
+    message = str(exc)
+    if "수신자" in message:
+        return "missing_recipient"
+    if "API 키" in message:
+        return "missing_api_key"
+    if "발신 이메일" in message:
+        return "missing_from_email"
+    if "메일 API" in message or "Resend" in message:
+        return "provider_error"
+    return "failed"
+
+
 class Handler(BaseHTTPRequestHandler):
     settings: Settings
     sessions: dict[str, tuple[str, float]] = {}
@@ -612,6 +625,15 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/stats":
             summary = stats(self.settings.db_path)
             summary["app_version"] = os.getenv("RENDER_GIT_COMMIT", "local")[:7]
+            summary["last_digest_attempt"] = get_setting(
+                self.settings.db_path, "last_digest_attempt", ""
+            )
+            summary["last_digest_status"] = get_setting(
+                self.settings.db_path, "last_digest_status", "not_attempted"
+            )
+            summary["last_digest_date"] = get_setting(
+                self.settings.db_path, "last_automation_digest", ""
+            )
             self._json(summary)
             return
         if parsed.path == "/api/news":
@@ -888,6 +910,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             today = now_kst.date().isoformat()
             if get_setting(self.settings.db_path, "last_automation_digest", "") == today:
+                set_setting(self.settings.db_path, "last_digest_status", "already_sent")
                 self._json({"ok": True, "skipped": True, "reason": "오늘 예약 메일은 이미 발송되었습니다."})
                 return
             if not self.digest_lock.acquire(blocking=False):
@@ -900,6 +923,7 @@ class Handler(BaseHTTPRequestHandler):
                 preview = build_email_digest(self.settings.db_path)
                 preview_counts = preview["counts"]
                 if sum(int(value) for value in preview_counts.values()) == 0:
+                    set_setting(self.settings.db_path, "last_digest_status", "waiting_for_data")
                     self._json({
                         "ok": True,
                         "skipped": True,
@@ -912,6 +936,11 @@ class Handler(BaseHTTPRequestHandler):
                     for email in self.headers.get("X-Digest-Recipients", "").split(",")
                     if valid_email(email.strip().lower())
                 ]
+                set_setting(
+                    self.settings.db_path,
+                    "last_digest_attempt",
+                    now_kst.isoformat(timespec="seconds"),
+                )
                 result = send_email_digest(
                     self.settings.db_path,
                     api_key_override=self.headers.get("X-Resend-Api-Key", "").strip(),
@@ -920,8 +949,16 @@ class Handler(BaseHTTPRequestHandler):
                     idempotency_key=f"concost-daily-digest-{today}",
                 )
                 set_setting(self.settings.db_path, "last_automation_digest", today)
+                set_setting(
+                    self.settings.db_path,
+                    "last_digest_status",
+                    "already_sent" if result.get("skipped") else "sent",
+                )
                 self._json(result)
             except Exception as exc:
+                set_setting(
+                    self.settings.db_path, "last_digest_status", digest_failure_code(exc)
+                )
                 self._json({"error": str(exc)}, 502)
             finally:
                 self.digest_lock.release()
@@ -1322,14 +1359,32 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                         try:
                             preview = build_email_digest(settings.db_path)
                             if sum(int(value) for value in preview["counts"].values()) > 0:
-                                send_email_digest(
+                                set_setting(
+                                    settings.db_path,
+                                    "last_digest_attempt",
+                                    now.isoformat(timespec="seconds"),
+                                )
+                                result = send_email_digest(
                                     settings.db_path,
                                     idempotency_key=f"concost-daily-digest-{today}",
                                 )
                                 set_setting(settings.db_path, "last_automation_digest", today)
+                                set_setting(
+                                    settings.db_path,
+                                    "last_digest_status",
+                                    "already_sent" if result.get("skipped") else "sent",
+                                )
                             else:
+                                set_setting(
+                                    settings.db_path, "last_digest_status", "waiting_for_data"
+                                )
                                 print("10:00 예약메일 보류: 수집된 요약 자료가 아직 0건입니다.")
                         except Exception as exc:
+                            set_setting(
+                                settings.db_path,
+                                "last_digest_status",
+                                digest_failure_code(exc),
+                            )
                             print(f"10:00 예약메일 실패: {exc}")
                         finally:
                             Handler.digest_lock.release()

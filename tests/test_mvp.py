@@ -29,7 +29,8 @@ from tender_radar.jiwoncok import (
 from tender_radar.scoring import MIN_NOTICE_SCORE, score_notice, should_keep_notice
 from tender_radar.secrets_store import get_secret
 from tender_radar.server import (
-    Handler, auto_collect_on_start_enabled, collection_max_workers, collection_sweep_timeout_seconds,
+    Handler, auto_collect_on_start_enabled, collection_max_workers,
+    collection_sweep_timeout_seconds, digest_failure_code,
     effective_collection_lookback_hours, internal_scheduler_enabled, in_collect_window,
     in_digest_send_window, in_digest_window,
 )
@@ -940,6 +941,11 @@ class MVPTests(unittest.TestCase):
         self.assertTrue(in_digest_send_window(friday_late_digest))
         self.assertFalse(in_collect_window(saturday_collect))
         self.assertFalse(in_digest_window(saturday_collect.replace(hour=10)))
+
+    def test_digest_failure_codes_are_actionable(self):
+        self.assertEqual(digest_failure_code(ValueError("활성화된 이메일 수신자가 없습니다.")), "missing_recipient")
+        self.assertEqual(digest_failure_code(ValueError("Resend API 키가 설정되지 않았습니다.")), "missing_api_key")
+        self.assertEqual(digest_failure_code(RuntimeError("메일 API 발송 실패")), "provider_error")
 
     def test_branded_digest_separates_new_and_existing(self):
         with tempfile.TemporaryDirectory() as tmp:
