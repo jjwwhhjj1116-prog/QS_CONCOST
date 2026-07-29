@@ -634,6 +634,11 @@ class Handler(BaseHTTPRequestHandler):
             summary["last_digest_date"] = get_setting(
                 self.settings.db_path, "last_automation_digest", ""
             )
+            summary["scheduler_enabled"] = internal_scheduler_enabled()
+            summary["collection_running"] = type(self).collection_lock.locked()
+            summary["last_collect_date"] = get_setting(
+                self.settings.db_path, "last_scheduled_collect", ""
+            )
             self._json(summary)
             return
         if parsed.path == "/api/news":
