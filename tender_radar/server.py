@@ -950,13 +950,15 @@ class Handler(BaseHTTPRequestHandler):
                     name=f"scheduled-collection-{job_id}",
                     daemon=True,
                 )
-                worker.start()
                 self._json({
                     "ok": True,
                     "accepted": True,
                     "job_id": job_id,
                     "job": self._get_collection_job(job_id),
                 }, 202)
+                # Confirm acceptance before any collector can consume enough
+                # resources to delay or interrupt this HTTP response.
+                worker.start()
             except Exception as exc:
                 type(self).collection_lock_owner = None
                 try:
@@ -1192,8 +1194,11 @@ class Handler(BaseHTTPRequestHandler):
             name=f"collection-{job_id}",
             daemon=True,
         )
-        worker.start()
         self._json({"ok": True, "job_id": job_id, "job": self._get_collection_job(job_id)}, 202)
+        # The browser must receive its job id before collection load begins.
+        # Otherwise a busy Free instance can return a gateway 502 even though
+        # the background job was successfully created.
+        worker.start()
         return
 
     def do_PUT(self) -> None:

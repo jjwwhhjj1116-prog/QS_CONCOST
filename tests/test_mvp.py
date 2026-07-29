@@ -149,7 +149,11 @@ class MVPTests(unittest.TestCase):
                 "X-Collect-Scheduled": "true",
                 "X-Collect-Scopes": "g2b,jiwoncok",
             }
-            collect_handler._json = lambda payload, status=200: collect_responses.append((payload, status))
+            def capture_collect_response(payload, status=200):
+                self.assertFalse(thread_mock.return_value.start.called)
+                collect_responses.append((payload, status))
+
+            collect_handler._json = capture_collect_response
             collect_handler.do_POST()
             self.assertTrue(collect_responses[0][0]["ok"])
             self.assertEqual(collect_responses[0][1], 202)
