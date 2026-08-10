@@ -54,7 +54,7 @@ class MVPTests(unittest.TestCase):
 
     def test_render_startup_recovery_respects_explicit_setting(self):
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "true"}, clear=True):
-            self.assertFalse(auto_collect_on_start_enabled())
+            self.assertTrue(auto_collect_on_start_enabled())
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "false"}, clear=True):
             self.assertFalse(auto_collect_on_start_enabled())
 
@@ -184,6 +184,42 @@ class MVPTests(unittest.TestCase):
             self.assertTrue(digest_responses[0][0]["ok"])
             self.assertTrue(send_mock.call_args.kwargs["idempotency_key"].startswith("concost-daily-digest-"))
             collect_mock.assert_not_called()
+
+    def test_scheduled_wait_mode_only_succeeds_after_collection_completes(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
+        ), patch("tender_radar.server.in_collect_window", return_value=True), patch(
+            "tender_radar.server.Handler._run_scheduled_collection_job"
+        ) as run_mock:
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            settings = Settings("api-key", 48, db, "127.0.0.1", 0)
+            handler = object.__new__(Handler)
+            handler.settings = settings
+            handler.path = "/api/automation/collect"
+            handler.headers = {
+                "Authorization": "Bearer automation-token",
+                "X-Collect-Scheduled": "true",
+                "X-Collect-Wait": "true",
+                "X-Collect-Scopes": "g2b",
+            }
+            responses = []
+            handler._json = lambda payload, status=200: responses.append((payload, status))
+
+            def complete_job(job_id, *_args):
+                Handler._update_collection_job(
+                    job_id, status="complete", ok=True, inserted=2, total=2, percent=100
+                )
+                Handler.collection_lock_owner = None
+                if Handler.collection_lock.locked():
+                    Handler.collection_lock.release()
+
+            run_mock.side_effect = complete_job
+            handler.do_POST()
+            self.assertEqual(responses[0][1], 200)
+            self.assertTrue(responses[0][0]["completed"])
+            self.assertEqual(responses[0][0]["job"]["inserted"], 2)
+            run_mock.assert_called_once()
 
     def test_render_never_runs_jiwoncok_inside_web_process(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
@@ -736,7 +772,8 @@ class MVPTests(unittest.TestCase):
         old_but_relevant = {
             "source": "지원COK", "source_key": "busan-20154", "category": "용역",
             "title": "범일3-1구역 공사비 협상을 위한 적산 용역",
-            "institution": source["institution"], "published_at": "2026-07-22",
+            "institution": source["institution"],
+            "published_at": (datetime.now() - timedelta(days=10)).date().isoformat(),
             "deadline_at": "", "estimated_price": None, "region": "부산",
             "notice_type": "신규", "change_reason": "", "changed_at": "",
             "url": "https://dynamice.busan.go.kr/example", "score": 65,

@@ -165,12 +165,6 @@ def is_render_runtime() -> bool:
 
 
 def auto_collect_on_start_enabled() -> bool:
-    # Never run a multi-source recovery sweep inside a Render web process.
-    # Timed-out collector threads cannot be force-stopped in Python; starting a
-    # second daily sweep immediately afterward can exhaust a Free instance and
-    # make its health check return 502. GitHub's split sweeps refill production.
-    if is_render_runtime():
-        return False
     configured = os.getenv("AUTO_COLLECT_ON_START", "").strip().lower()
     if configured:
         return configured in {"1", "true", "yes"}
@@ -937,6 +931,34 @@ class Handler(BaseHTTPRequestHandler):
                     })
                     return
                 job_id = type(self)._create_collection_job("09:00 예약 자료 수집을 시작했습니다.")
+                wait_for_completion = (
+                    self.headers.get("X-Collect-Wait", "").strip().lower() == "true"
+                )
+                if wait_for_completion:
+                    # GitHub automation must only report success after the API
+                    # response was parsed and the rows were committed.  The old
+                    # fire-and-forget daemon thread made a 202 response look like
+                    # a successful collection even when the worker failed later.
+                    self._run_scheduled_collection_job(
+                        job_id,
+                        service_key,
+                        law_key,
+                        self.settings.lookback_hours,
+                        now_kst.date().isoformat(),
+                        scopes,
+                    )
+                    job = self._get_collection_job(job_id) or {}
+                    payload = {
+                        "ok": bool(job.get("ok")),
+                        "accepted": True,
+                        "completed": True,
+                        "job_id": job_id,
+                        "job": job,
+                    }
+                    if not job.get("ok"):
+                        payload["error"] = "실제 저장까지 완료된 수집원이 없습니다."
+                    self._json(payload, 200 if job.get("ok") else 502)
+                    return
                 worker = threading.Thread(
                     target=self._run_scheduled_collection_job,
                     args=(
@@ -1348,29 +1370,28 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                     and current_stats.get("cost_count", 0) > 0
                 ):
                     return
-                if not handler.collection_lock.acquire(blocking=False):
-                    return
                 service_key = get_secret(settings.db_path, "public_data_api_key", settings.service_key)
                 law_key = get_secret(settings.db_path, "law_api_oc")
-                job_id = handler._create_collection_job("서버 시작 후 비어 있는 자료를 자동 복구하고 있습니다.")
-                # _run_collection_job only needs the configured settings; using the
-                # same tracked job path lets the admin UI attach instead of seeing
-                # an unexplained lock/409 failure during startup recovery.
                 runner = object.__new__(handler)
                 runner.settings = settings
-                missing_scopes = set()
+                # A free Render process has little memory.  Recover the two
+                # business-critical, bounded sources sequentially so the site
+                # becomes useful after an ephemeral DB reset without recreating
+                # the multi-source thread spike that previously caused 502s.
+                recovery_batches: list[set[str]] = []
                 if current_stats.get("total", 0) == 0:
-                    missing_scopes.update({
-                        "g2b", "nuri", "lh", "expressway", "kwater",
-                        "kapt", "jiwoncok", "content",
-                    })
-                if current_stats.get("pipeline_count", 0) == 0:
-                    missing_scopes.add("pipeline")
-                if current_stats.get("cost_count", 0) == 0:
-                    missing_scopes.add("cost")
-                runner._run_collection_job(
-                    job_id, service_key, law_key, settings.lookback_hours, missing_scopes
-                )
+                    recovery_batches.append({"g2b"})
+                if current_stats.get("news_total", 0) == 0:
+                    recovery_batches.append({"content"})
+                for scopes in recovery_batches:
+                    if not handler.collection_lock.acquire(blocking=False):
+                        return
+                    job_id = handler._create_collection_job(
+                        "서버 재시작 후 비어 있는 자료를 자동 복구하고 있습니다."
+                    )
+                    runner._run_collection_job(
+                        job_id, service_key, law_key, settings.lookback_hours, scopes
+                    )
                 # Startup recovery only rebuilds an empty/ephemeral database.
                 # It must not mark the actual 09:00 daily collection complete.
             except Exception as exc:
