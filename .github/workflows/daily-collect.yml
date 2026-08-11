@@ -44,6 +44,12 @@ jobs:
           TZ: Asia/Seoul
         run: |
           test -n "$DIGEST_TRIGGER_TOKEN"
+          if [ "$SCHEDULED_RUN" != "true" ] && [ "$MANUAL_SCOPES" = "bootstrap" ]; then
+            http_code=$(curl --silent --show-error --max-time 90               --output /tmp/bootstrap-response.json --write-out "%{http_code}"               -X POST               -H "Authorization: Bearer $DIGEST_TRIGGER_TOKEN"               -H "Content-Type: application/json"               --data-binary @bootstrap_notices.json               https://qs-concost.onrender.com/api/automation/import-g2b)
+            cat /tmp/bootstrap-response.json
+            test "$http_code" = "200"
+            exit 0
+          fi
           trigger_render() {
             local scopes="$1"
             local response="/tmp/collect-${scopes//,/\-}.json"
