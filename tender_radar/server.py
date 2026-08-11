@@ -841,12 +841,38 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if parsed.path in {"/api/automation/collect", "/api/automation/import-jiwoncok"}:
+        if parsed.path in {"/api/automation/collect", "/api/automation/import-g2b", "/api/automation/import-jiwoncok"}:
             expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
             supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
             if not expected or not secrets.compare_digest(expected, supplied):
                 self._json({"error": "인증되지 않은 자동화 요청입니다."}, 401)
                 return
+        if parsed.path == "/api/automation/import-g2b":
+            try:
+                payload = self._read_json(4_000_000)
+                supplied_rows = payload.get("rows", [])
+                if not isinstance(supplied_rows, list):
+                    raise ValueError("rows must be a list")
+                rows = [
+                    row for row in supplied_rows[:2000]
+                    if isinstance(row, dict)
+                    and row.get("source") == "나라장터"
+                    and row.get("source_key")
+                    and row.get("title")
+                    and should_keep_notice(row)
+                ]
+                counts = upsert_notices(self.settings.db_path, rows)
+                self._json({
+                    "ok": True,
+                    "total": len(rows),
+                    "filtered": len(supplied_rows) - len(rows),
+                    **counts,
+                })
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._json({"error": str(exc)}, 502)
+            return
         if parsed.path == "/api/automation/import-jiwoncok":
             try:
                 payload = self._read_json(2_000_000)
