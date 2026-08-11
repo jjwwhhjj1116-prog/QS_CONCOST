@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any
@@ -109,14 +110,21 @@ def fetch_category(
         request = Request(url, headers={"User-Agent": "QS-Tender-Radar/0.1"})
         try:
             raw = ""
-            for attempt in range(2):
+            for attempt, timeout_seconds in enumerate((10, 15, 20), start=1):
                 try:
-                    with urlopen(request, timeout=12) as response:
+                    with urlopen(request, timeout=timeout_seconds) as response:
                         raw = response.read().decode("utf-8")
                     break
                 except TimeoutError as exc:
-                    if attempt == 1:
-                        raise G2BError("나라장터 API 읽기 시간 초과(2회 재시도 실패)") from exc
+                    if attempt == 3:
+                        raise G2BError("나라장터 API 읽기 시간 초과(3회 재시도 실패)") from exc
+                except URLError as exc:
+                    reason = exc.reason
+                    is_timeout = isinstance(reason, (TimeoutError, socket.timeout)) or (
+                        "timed out" in str(reason).lower()
+                    )
+                    if not is_timeout or attempt == 3:
+                        raise
         except HTTPError as exc:
             try:
                 detail = exc.read().decode("utf-8", errors="replace")[:300].replace("\n", " ")
@@ -151,7 +159,22 @@ def collect_recent(service_key: str, lookback_hours: int = 48) -> list[dict[str,
     end = datetime.now()
     start = end - timedelta(hours=lookback_hours)
     result: list[dict[str, Any]] = []
+    errors: list[str] = []
+    completed_categories = 0
     with ThreadPoolExecutor(max_workers=len(OPERATIONS), thread_name_prefix="g2b-category") as pool:
-        for rows in pool.map(lambda category: fetch_category(service_key, category, start, end), OPERATIONS):
-            result.extend(rows)
+        futures = {
+            category: pool.submit(fetch_category, service_key, category, start, end)
+            for category in OPERATIONS
+        }
+        for category, future in futures.items():
+            try:
+                result.extend(future.result())
+                completed_categories += 1
+            except Exception as exc:
+                errors.append(f"{category}: {exc}")
+    # One slow G2B category must not discard rows already received from the
+    # other category. Only fail the source when every category failed.
+    if completed_categories == 0:
+        raise G2BError(" / ".join(errors) or "나라장터 API 응답을 받지 못했습니다.")
     return result
+
