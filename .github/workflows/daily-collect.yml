@@ -105,11 +105,21 @@ jobs:
           if [ "$external_g2b" = "true" ]; then
             test -n "$DATA_GO_KR_SERVICE_KEY"
             echo "G2B and Nuri collection run on the GitHub worker."
-            python -m tender_radar.g2b_worker
+            g2b_ok=false
+            for attempt in 1 2 3; do
+              if python -m tender_radar.g2b_worker; then
+                g2b_ok=true
+                break
+              fi
+              echo "Public bid API attempt $attempt failed; retrying after a short delay."
+              sleep $((attempt * 10))
+            done
+            test "$g2b_ok" = "true"
           fi
 
           if [ "$external_jiwoncok" = "true" ]; then
             echo "JiwonCOK collection runs on the GitHub worker."
             python -m tender_radar.jiwoncok_worker
           fi
+
 
