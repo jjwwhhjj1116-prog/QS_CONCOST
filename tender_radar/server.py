@@ -862,6 +862,11 @@ class Handler(BaseHTTPRequestHandler):
                     and should_keep_notice(row)
                 ]
                 counts = upsert_notices(self.settings.db_path, rows)
+                set_setting(
+                    self.settings.db_path,
+                    "last_scheduled_collect",
+                    datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+                )
                 self._json({
                     "ok": True,
                     "total": len(rows),
