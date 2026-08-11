@@ -1,4 +1,4 @@
-"""Collect G2B notices on GitHub and import them into Render."""
+"""Collect G2B and Nuri notices on GitHub and import them into Render."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import os
 from urllib.request import Request, urlopen
 
-from .g2b import collect_recent
+from . import g2b, nuri
 from .scoring import should_keep_notice
 
 
@@ -26,9 +26,26 @@ def main() -> None:
     except ValueError:
         lookback_hours = 72
 
-    rows = collect_recent(service_key, lookback_hours)
+    rows: list[dict] = []
+    completed = 0
+    errors: list[str] = []
+    for source, collect in (
+        ("나라장터", g2b.collect_recent),
+        ("누리장터", nuri.collect_recent),
+    ):
+        try:
+            rows.extend(collect(service_key, lookback_hours))
+            completed += 1
+        except Exception as exc:
+            errors.append(f"{source}: {exc}")
+    if completed == 0:
+        raise SystemExit(" / ".join(errors) or "공공데이터 수집 실패")
+
     filtered = [row for row in rows if should_keep_notice(row)]
-    payload = json.dumps({"rows": filtered}, ensure_ascii=False).encode("utf-8")
+    payload = json.dumps(
+        {"rows": filtered, "errors": errors},
+        ensure_ascii=False,
+    ).encode("utf-8")
     request = Request(
         target_url,
         data=payload,
@@ -36,11 +53,13 @@ def main() -> None:
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json; charset=utf-8",
-            "User-Agent": "CONCOST-G2B-Worker/1.0",
+            "User-Agent": "CONCOST-Public-Bid-Worker/1.0",
         },
     )
     with urlopen(request, timeout=60) as response:
         print(f"Import HTTP {response.status}: {response.read().decode('utf-8')}")
+    if errors:
+        print("Partial source errors:", " | ".join(errors))
 
 
 if __name__ == "__main__":
