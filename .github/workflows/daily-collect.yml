@@ -37,6 +37,7 @@ jobs:
       - name: Trigger one bounded collection sweep
         env:
           DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
+          DATA_GO_KR_SERVICE_KEY: ${{ secrets.DATA_GO_KR_SERVICE_KEY }}
           SCHEDULED_RUN: ${{ github.event_name == 'schedule' }}
           SCHEDULE_SPEC: ${{ github.event.schedule }}
           MANUAL_SCOPES: ${{ inputs.scopes }}
@@ -71,23 +72,26 @@ jobs:
           PY
           }
 
+          external_g2b=false
           external_jiwoncok=false
           if [ "$SCHEDULED_RUN" = "true" ]; then
             case "$SCHEDULE_SPEC" in
-              "3 0 * * 1-5")  trigger_render "g2b,nuri" ;;
+              "3 0 * * 1-5")  external_g2b=true ;;
               "13 0 * * 1-5") trigger_render "content" ;;
               "23 0 * * 1-5") trigger_render "pipeline" ;;
               "33 0 * * 1-5") trigger_render "cost" ;;
               "43 0 * * 1-5") trigger_render "lh,expressway,kwater,kapt" ;;
-              "53 0 * * 1-5") trigger_render "g2b"; external_jiwoncok=true ;;
-              *) trigger_render "g2b" ;;
+              "53 0 * * 1-5") external_g2b=true; external_jiwoncok=true ;;
+              *) external_g2b=true ;;
             esac
           else
             collect_scopes="${MANUAL_SCOPES:-g2b}"
             web_scopes=""
             IFS=',' read -ra parts <<< "$collect_scopes"
             for scope in "${parts[@]}"; do
-              if [ "$scope" = "jiwoncok" ]; then
+              if [ "$scope" = "g2b" ] || [ "$scope" = "nuri" ]; then
+                external_g2b=true
+              elif [ "$scope" = "jiwoncok" ]; then
                 external_jiwoncok=true
               elif [ -n "$scope" ]; then
                 web_scopes="${web_scopes:+$web_scopes,}$scope"
@@ -98,7 +102,14 @@ jobs:
             fi
           fi
 
+          if [ "$external_g2b" = "true" ]; then
+            test -n "$DATA_GO_KR_SERVICE_KEY"
+            echo "G2B and Nuri collection run on the GitHub worker."
+            python -m tender_radar.g2b_worker
+          fi
+
           if [ "$external_jiwoncok" = "true" ]; then
             echo "JiwonCOK collection runs on the GitHub worker."
             python -m tender_radar.jiwoncok_worker
           fi
+
