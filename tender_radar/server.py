@@ -856,7 +856,7 @@ class Handler(BaseHTTPRequestHandler):
                 rows = [
                     row for row in supplied_rows[:2000]
                     if isinstance(row, dict)
-                    and row.get("source") == "나라장터"
+                    and row.get("source") in {"나라장터", "누리장터"}
                     and row.get("source_key")
                     and row.get("title")
                     and should_keep_notice(row)
