@@ -8,7 +8,12 @@ on:
     - cron: "53,58 0 * * 1-5"
     - cron: "3,8,18,28 1 * * 1-5"
   workflow_dispatch:
-
+    inputs:
+      correction:
+        description: "Send one corrected digest for today"
+        required: false
+        type: boolean
+        default: false
 concurrency:
   group: concost-daily-email-digest
   cancel-in-progress: false
@@ -25,6 +30,7 @@ jobs:
           DIGEST_FROM_EMAIL: ${{ secrets.DIGEST_FROM_EMAIL }}
           DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
           SCHEDULED_RUN: ${{ github.event_name == 'schedule' }}
+          CORRECTION: ${{ inputs.correction || 'false' }}
         run: |
           test -n "$DIGEST_TRIGGER_TOKEN"
           test -n "$RESEND_API_KEY"
@@ -47,4 +53,5 @@ jobs:
             -H "X-Digest-From-Email: $DIGEST_FROM_EMAIL" \
             -H "X-Digest-Recipients: $DIGEST_RECIPIENTS" \
             -H "X-Digest-Scheduled: $SCHEDULED_RUN" \
+            -H "X-Digest-Correction: $CORRECTION" \
             https://qs-concost.onrender.com/api/automation/digest

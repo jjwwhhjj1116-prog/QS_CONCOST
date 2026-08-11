@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from unittest.mock import patch
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from tender_radar.db import (
     connect, delete_digest_recipient, list_digest_recipients, save_digest_recipient,
@@ -328,6 +329,39 @@ class MVPTests(unittest.TestCase):
             self.assertTrue(responses[0][0]["skipped"])
             self.assertIn("0건", responses[0][0]["reason"])
             send_mock.assert_not_called()
+
+    def test_correction_digest_bypasses_daily_marker_with_unique_key(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
+        ), patch("tender_radar.server.build_email_digest", return_value={
+            "counts": {"new_notices": 30, "old_notices": 7, "new_news": 0, "old_news": 0}
+        }), patch(
+            "tender_radar.server.send_email_digest",
+            return_value={"ok": True, "new_notices": 30, "old_notices": 7},
+        ) as send_mock:
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+            set_setting(db, "last_automation_digest", today)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            handler.path = "/api/automation/digest"
+            handler.headers = {
+                "Authorization": "Bearer automation-token",
+                "X-Digest-Correction": "true",
+                "X-Resend-Api-Key": "re_test",
+                "X-Digest-From-Email": "CONCOST <news@con-cost.co.kr>",
+                "X-Digest-Recipients": "team@con-cost.co.kr",
+            }
+            responses = []
+            handler._json = lambda payload, status=200: responses.append((payload, status))
+            handler.do_POST()
+            self.assertTrue(responses[0][0]["ok"])
+            self.assertEqual(send_mock.call_args.kwargs["subject_prefix"], "[정정]")
+            self.assertEqual(
+                send_mock.call_args.kwargs["idempotency_key"],
+                f"concost-daily-digest-correction-{today}",
+            )
 
     def test_english_abbreviation_does_not_match_inside_unrelated_word(self):
         score, matched = score_notice(

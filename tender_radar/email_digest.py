@@ -220,8 +220,18 @@ def send_email_digest(
     from_email_override: str = "",
     recipients_override: list[str] | None = None,
     idempotency_key: str = "",
+    subject_prefix: str = "",
 ) -> dict:
     digest = build_email_digest(db_path, website_url)
+    if subject_prefix.strip():
+        prefix = subject_prefix.strip()
+        digest["subject"] = f"{prefix} {digest['subject']}"
+        digest["text"] = f"{prefix} 수정된 수집자료 기준 재발송입니다.\n\n{digest['text']}"
+        digest["html"] = digest["html"].replace(
+            "오늘의 건설 기회 브리핑",
+            f"{html.escape(prefix)} 오늘의 건설 기회 브리핑",
+            1,
+        )
     recipients = recipients_override or [x["email"] for x in list_digest_recipients(db_path) if x["is_active"]]
     if not recipients:
         raise ValueError("활성화된 이메일 수신자가 없습니다.")

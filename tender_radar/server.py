@@ -1065,7 +1065,13 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return
             today = now_kst.date().isoformat()
-            if get_setting(self.settings.db_path, "last_automation_digest", "") == today:
+            correction = (
+                self.headers.get("X-Digest-Correction", "").strip().lower() == "true"
+            )
+            if (
+                not correction
+                and get_setting(self.settings.db_path, "last_automation_digest", "") == today
+            ):
                 set_setting(self.settings.db_path, "last_digest_status", "already_sent")
                 self._json({"ok": True, "skipped": True, "reason": "오늘 예약 메일은 이미 발송되었습니다."})
                 return
@@ -1102,7 +1108,11 @@ class Handler(BaseHTTPRequestHandler):
                     api_key_override=self.headers.get("X-Resend-Api-Key", "").strip(),
                     from_email_override=self.headers.get("X-Digest-From-Email", "").strip(),
                     recipients_override=recipients or None,
-                    idempotency_key=f"concost-daily-digest-{today}",
+                    idempotency_key=(
+                        f"concost-daily-digest-correction-{today}"
+                        if correction else f"concost-daily-digest-{today}"
+                    ),
+                    subject_prefix="[정정]" if correction else "",
                 )
                 set_setting(self.settings.db_path, "last_automation_digest", today)
                 set_setting(
