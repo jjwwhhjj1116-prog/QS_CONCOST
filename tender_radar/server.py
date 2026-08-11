@@ -17,6 +17,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from .config import Settings
@@ -39,6 +40,37 @@ from .secrets_store import get_secret, migrate_secret, set_secret
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+DEFAULT_PUBLIC_BID_SNAPSHOT_URL = (
+    "https://raw.githubusercontent.com/jjwwhhjj1116-prog/QS_CONCOST/"
+    "codex/bootstrap-bids/bootstrap_notices.json"
+)
+
+
+def restore_public_bid_snapshot(db_path: Path) -> dict[str, int]:
+    """Restore the last known public bid set when Render starts with an empty DB.
+
+    Render's free filesystem is ephemeral and its direct connection to the
+    public-data API is intermittently unavailable. The GitHub worker keeps a
+    sanitized public-notice snapshot, which lets a restarted web process show
+    useful data immediately while fresh collection continues separately.
+    """
+    snapshot_url = os.getenv(
+        "PUBLIC_BID_SNAPSHOT_URL", DEFAULT_PUBLIC_BID_SNAPSHOT_URL
+    ).strip()
+    if not snapshot_url:
+        return {"inserted": 0, "updated": 0, "unchanged": 0}
+    request = Request(
+        snapshot_url,
+        headers={"User-Agent": "CONCOST-Startup-Restore/1.0"},
+    )
+    with urlopen(request, timeout=15) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    rows = payload.get("rows", []) if isinstance(payload, dict) else []
+    relevant = [
+        row for row in rows
+        if isinstance(row, dict) and should_keep_notice(row)
+    ]
+    return upsert_notices(db_path, relevant)
 
 
 def collection_job_timeout_seconds() -> float:
@@ -1389,12 +1421,24 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
         worker = threading.Thread(target=auto_collect, name="auto-collector", daemon=True)
         worker.start()
     handler = type("ConfiguredHandler", (Handler,), {"settings": settings})
-    if auto_collect_on_start_enabled():
+    if is_render_runtime() or auto_collect_on_start_enabled():
         def restore_ephemeral_database() -> None:
             # 서버가 먼저 응답 가능 상태가 된 뒤, 비어 있는 임시 DB만 백그라운드에서 복구한다.
             time.sleep(1)
             try:
                 current_stats = stats(settings.db_path)
+                if current_stats.get("total", 0) == 0:
+                    try:
+                        restored = restore_public_bid_snapshot(settings.db_path)
+                        print(
+                            "시작 시 입찰공고 스냅샷 복원: "
+                            f"{restored.get('inserted', 0)}건"
+                        )
+                        current_stats = stats(settings.db_path)
+                    except Exception as snapshot_exc:
+                        print(f"시작 시 입찰공고 스냅샷 복원 실패: {snapshot_exc}")
+                if not auto_collect_on_start_enabled():
+                    return
                 if (
                     current_stats.get("total", 0) > 0
                     and current_stats.get("pipeline_count", 0) > 0

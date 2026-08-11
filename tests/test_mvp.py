@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta
+from io import BytesIO
 from unittest.mock import patch
 from pathlib import Path
 
@@ -33,7 +34,7 @@ from tender_radar.server import (
     collection_sweep_timeout_seconds, digest_failure_code,
     effective_collection_lookback_hours, internal_scheduler_enabled, in_collect_window,
     in_digest_send_window, in_digest_window, is_manual_safe_collection,
-    manual_collection_scopes,
+    manual_collection_scopes, restore_public_bid_snapshot,
 )
 
 
@@ -57,6 +58,30 @@ class MVPTests(unittest.TestCase):
             self.assertTrue(auto_collect_on_start_enabled())
         with patch.dict("os.environ", {"RENDER": "true", "AUTO_COLLECT_ON_START": "false"}, clear=True):
             self.assertFalse(auto_collect_on_start_enabled())
+
+    def test_empty_render_database_can_restore_public_bid_snapshot(self):
+        row = {
+            "source": "나라장터",
+            "source_key": "snapshot-1",
+            "category": "용역",
+            "title": "재건축 정비사업 공사비 검증 용역",
+            "institution": "정비사업조합",
+            "published_at": "2026-08-11T09:00:00+09:00",
+            "deadline_at": "2026-08-20T17:00:00+09:00",
+            "region": "서울",
+            "url": "https://example.test/notice/1",
+            "score": 80,
+            "matched_keywords": ["공사비 검증", "재건축"],
+        }
+        response = BytesIO(json.dumps({"rows": [row]}, ensure_ascii=False).encode("utf-8"))
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "tender_radar.server.urlopen", return_value=response
+        ):
+            db = Path(tmp) / "snapshot.db"
+            init_db(db)
+            counts = restore_public_bid_snapshot(db)
+            self.assertEqual(counts["inserted"], 1)
+            self.assertEqual(stats(db)["total"], 1)
 
     def test_manual_collection_prioritizes_opportunities_over_heavy_analysis(self):
         scopes = manual_collection_scopes()
