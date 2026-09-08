@@ -11,9 +11,27 @@ from tender_radar.db import init_db, stats, get_setting
 from tender_radar.public_snapshot import merge_snapshot, publish_snapshot
 from tender_radar.scoring import score_notice
 from tender_radar.server import restore_public_bid_snapshot
+from tender_radar import g2b, nuri
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_no_data_response_is_empty_not_a_transport_failure(self):
+        payload = {"response": {"header": {"resultCode": "03", "resultMsg": "NODATA_ERROR"}}}
+        for parser in (g2b._extract_payload, nuri._extract_payload):
+            self.assertEqual(parser(payload), ([], 0))
+            with self.assertRaises(RuntimeError):
+                parser({"response": {"header": {"resultCode": "03", "resultMsg": "unexpected error"}}})
+
+    def test_weekly_queries_are_bounded_day_slices(self):
+        spans = []
+        def fetch(key, category, start, end):
+            spans.append((category, start, end))
+            return []
+        with patch("tender_radar.g2b.fetch_category", side_effect=fetch):
+            g2b.collect_recent("test-key", 168)
+        self.assertEqual(len(spans), 14)
+        self.assertTrue(all(end-start == timedelta(days=1) for _, start, end in spans))
+
     def row(self, key="1"):
         return {"source": "나라장터", "source_key": key, "category": "용역",
                 "title": "부산 재개발 공사비 검증 용역", "region": "부산",

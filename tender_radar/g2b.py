@@ -76,6 +76,8 @@ def _extract_payload(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], int
     response = payload.get("response", payload)
     header = response.get("header", {})
     code = str(header.get("resultCode", "00"))
+    if code in {"03", "3"} and str(header.get("resultMsg", "")).upper() == "NODATA_ERROR":
+        return [], 0
     if code not in {"00", "0"}:
         raise G2BError(f"API 오류 {code}: {header.get('resultMsg', '알 수 없는 오류')}")
     body = response.get("body", {})

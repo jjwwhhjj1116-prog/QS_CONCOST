@@ -39,6 +39,7 @@ jobs:
       - name: Trigger one bounded collection sweep
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PYTHONUNBUFFERED: "1"
           DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
           DATA_GO_KR_SERVICE_KEY: ${{ secrets.DATA_GO_KR_SERVICE_KEY }}
           SCHEDULED_RUN: ${{ github.event_name == 'schedule' }}
@@ -77,13 +78,14 @@ jobs:
 
           external_g2b=false
           external_jiwoncok=false
+          web_ok=true
           if [ "$SCHEDULED_RUN" = "true" ]; then
             case "$SCHEDULE_SPEC" in
               "3 0 * * 1-5")  external_g2b=true ;;
-              "13 0 * * 1-5") trigger_render "content" ;;
-              "23 0 * * 1-5") trigger_render "pipeline" ;;
-              "33 0 * * 1-5") trigger_render "cost" ;;
-              "43 0 * * 1-5") trigger_render "lh,expressway,kwater,kapt" ;;
+              "13 0 * * 1-5") trigger_render "content" || web_ok=false ;;
+              "23 0 * * 1-5") trigger_render "pipeline" || web_ok=false ;;
+              "33 0 * * 1-5") trigger_render "cost" || web_ok=false ;;
+              "43 0 * * 1-5") trigger_render "lh,expressway,kwater,kapt" || web_ok=false ;;
               "53 0 * * 1-5") external_g2b=true; external_jiwoncok=true ;;
               *) external_g2b=true ;;
             esac
@@ -101,7 +103,7 @@ jobs:
               fi
             done
             if [ -n "$web_scopes" ]; then
-              trigger_render "$web_scopes"
+              trigger_render "$web_scopes" || web_ok=false
             fi
           fi
 
@@ -127,5 +129,6 @@ jobs:
           if [ "$external_g2b" = "true" ]; then
             test "$g2b_ok" = "true"
           fi
+          test "$web_ok" = "true"
 
 
