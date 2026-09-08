@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from urllib.error import HTTPError
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -45,6 +46,16 @@ def main():
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
 
+    # Secret updates deploy asynchronously. Probe a read-only endpoint before
+    # starting work; never retry a potentially accepted collection POST.
+    for attempt in range(12):
+        try:
+            call('/api/trial/digest')
+            break
+        except HTTPError as error:
+            if error.code != 401 or attempt == 11:
+                raise SystemExit(f'Trial authentication probe failed: HTTP {error.code}') from None
+            time.sleep(5)
     started = call('/api/trial/collect', {'lookback_hours': 168})
     print(json.dumps(started), flush=True)
     previous = None
