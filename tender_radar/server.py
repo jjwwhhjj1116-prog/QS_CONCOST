@@ -61,8 +61,8 @@ def restore_public_bid_snapshot(db_path: Path) -> dict[str, int]:
     if not snapshot_url:
         return {"inserted": 0, "updated": 0, "unchanged": 0}
     request = Request(
-        snapshot_url,
-        headers={"User-Agent": "CONCOST-Startup-Restore/1.0"},
+        snapshot_url + ("&" if "?" in snapshot_url else "?") + f"restore={int(time.time())}",
+        headers={"User-Agent": "CONCOST-Startup-Restore/1.0", "Cache-Control": "no-cache"},
     )
     with urlopen(request, timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))

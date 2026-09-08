@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-SCORING_VERSION = "concost-consulting-v5"
+SCORING_VERSION = "concost-consulting-v6"
 MIN_NOTICE_SCORE = 40
 
 # CONCOST는 시공사가 아니라 공사비·원가·안전·계약 전문 컨설팅 회사다.
@@ -67,7 +67,8 @@ DIRECT_CONSTRUCTION = {
     "교체공사": 45, "설치공사": 45, "철거공사": 45,
 }
 
-IRRELEVANT = ("식자재", "보험", "단순 임대", "폐기물 운반", "청소용역", "경비용역")
+IRRELEVANT = ("식자재", "보험", "단순 임대", "폐기물 운반", "청소용역", "경비용역",
+              "자동차사고", "개인정보 영향평가")
 
 SAFETY_DIAGNOSIS_TERMS = (
     "정밀안전진단", "정밀안전점검", "안전진단", "안전점검",

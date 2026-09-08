@@ -98,6 +98,8 @@ jobs:
                 external_g2b=true
               elif [ "$scope" = "jiwoncok" ]; then
                 external_jiwoncok=true
+              elif [ "$scope" = "restore" ]; then
+                web_scopes="${web_scopes:+$web_scopes,}g2b"
               elif [ -n "$scope" ]; then
                 web_scopes="${web_scopes:+$web_scopes,}$scope"
               fi

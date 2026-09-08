@@ -74,6 +74,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_place_names_and_closed_evaluation_are_not_opportunities(self):
         for title in ("원적산 무장애나눔길 조성사업", "향적산 치유의 숲 보완공사",
+                      "자동차사고 경상환자 장기치료 분쟁조정시스템 구축 감리 및 개인정보 영향평가",
                       "거제 수정산성 종합정비계획 수립 용역",
                       "공공주택지구 용역 제안서 평가위원회 개최 결과",
                       "공공주택지구 용역 제안서 평가위원회 일정 변경 공지"):
