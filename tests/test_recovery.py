@@ -12,9 +12,31 @@ from tender_radar.public_snapshot import merge_snapshot, publish_snapshot
 from tender_radar.scoring import score_notice
 from tender_radar.server import restore_public_bid_snapshot
 from tender_radar import g2b, nuri
+from tender_radar.collection_trigger import trigger
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_automation_waits_for_real_completion_not_acceptance(self):
+        replies = [BytesIO(json.dumps(value).encode()) for value in (
+            {"accepted": True, "job_id": "abc"},
+            {"status": "running"},
+            {"status": "complete", "ok": True, "total": 2},
+        )]
+        with patch.dict("os.environ", {"DIGEST_TRIGGER_TOKEN": "test-token"}), \
+             patch("tender_radar.collection_trigger.urlopen", side_effect=replies) as opened, \
+             patch("tender_radar.collection_trigger.time.sleep"):
+            self.assertEqual(trigger("content")["total"], 2)
+            self.assertEqual(opened.call_count, 3)
+            self.assertNotIn("X-collect-wait", opened.call_args_list[0].args[0].headers)
+
+    def test_automation_does_not_report_failed_job_as_success(self):
+        replies = [BytesIO(json.dumps(value).encode()) for value in (
+            {"accepted": True, "job_id": "abc"}, {"status": "complete", "ok": False})]
+        with patch.dict("os.environ", {"DIGEST_TRIGGER_TOKEN": "test-token"}), \
+             patch("tender_radar.collection_trigger.urlopen", side_effect=replies):
+            with self.assertRaises(RuntimeError):
+                trigger("content")
+
     def test_no_data_response_is_empty_not_a_transport_failure(self):
         payload = {"response": {"header": {"resultCode": "03", "resultMsg": "NODATA_ERROR"}}}
         for parser in (g2b._extract_payload, nuri._extract_payload):

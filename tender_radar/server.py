@@ -802,8 +802,14 @@ class Handler(BaseHTTPRequestHandler):
                 "recipients_permanent": bool(recipients) and (recipients_env or persistent_db),
             })
             return
-        if parsed.path.startswith("/api/collect/status/"):
-            if not self._require_admin():
+        if parsed.path.startswith(("/api/collect/status/", "/api/automation/collect/status/")):
+            if parsed.path.startswith("/api/automation/"):
+                expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
+                supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+                if not expected or not secrets.compare_digest(expected, supplied):
+                    self._json({"error": "인증되지 않은 자동화 요청입니다."}, 401)
+                    return
+            elif not self._require_admin():
                 return
             job_id = parsed.path.rsplit("/", 1)[-1]
             job = self._get_collection_job(job_id)
