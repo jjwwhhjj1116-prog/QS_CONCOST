@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import time
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -21,12 +21,20 @@ def trigger(scopes: str) -> dict:
     if not accepted.get("accepted") or not accepted.get("job_id"):
         raise RuntimeError("Collection was not accepted: " + str(accepted.get("reason", accepted.get("error", "unknown"))))
     url = BASE_URL + "/api/automation/collect/status/" + quote(accepted["job_id"], safe="")
+    print("Accepted collection job:", accepted["job_id"])
     deadline = time.monotonic() + 180
     last_error = ""
     while time.monotonic() < deadline:
         try:
             with urlopen(Request(url, headers={"Authorization": f"Bearer {token}"}), timeout=15) as response:
                 job = json.load(response)
+        except HTTPError as exc:
+            print("Status request HTTP", exc.code)
+            if exc.code in (401, 403, 404):
+                raise RuntimeError(f"Collection status unavailable: HTTP {exc.code}") from exc
+            last_error = f"HTTP {exc.code}"
+            time.sleep(3)
+            continue
         except (URLError, TimeoutError, ValueError) as exc:
             last_error = type(exc).__name__
             time.sleep(3)
