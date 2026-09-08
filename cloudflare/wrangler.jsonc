@@ -13,20 +13,14 @@
   "triggers": { "crons": [] },
   "d1_databases": [{
     "binding": "DB", "database_name": "concost-migration-trial",
-    "database_id": "00000000-0000-0000-0000-000000000000",
+    "database_id": "ba8009cf-c015-4c98-ab01-d0e7f0768586",
     "migrations_dir": "migrations"
   }],
-  "containers": [{
-    "class_name": "Collector", "image": "./Collector.Dockerfile",
-    "image_build_context": "..", "max_instances": 2, "instance_type": "basic"
-  }],
-  "durable_objects": { "bindings": [{ "name": "COLLECTOR", "class_name": "Collector" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Collector"] }],
   "queues": {
     "producers": [{ "binding": "COLLECTION_QUEUE", "queue": "concost-trial-collection" }],
     "consumers": [{
       "queue": "concost-trial-collection", "max_batch_size": 1,
-      "max_concurrency": 2, "max_retries": 1,
+      "max_batch_timeout": 1, "max_concurrency": 5, "max_retries": 2,
       "dead_letter_queue": "concost-trial-dead-letter"
     }]
   },

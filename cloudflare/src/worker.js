@@ -1,15 +1,5 @@
-import { Container, getContainer } from '@cloudflare/containers';
-import { env as bindings } from 'cloudflare:workers';
-import { filterRows, jobState, kstParts, scheduleAction, todayDigest, validateResult } from './logic.js';
-
-export class Collector extends Container {
-  defaultPort = 8080;
-  sleepAfter = '5m';
-  envVars = {
-    DATA_GO_KR_SERVICE_KEY: bindings.DATA_GO_KR_SERVICE_KEY || '',
-    LAW_API_OC: bindings.LAW_API_OC || '',
-  };
-}
+import { filterRows, jobState, kstParts, scheduleAction, todayDigest } from './logic.js';
+import { initialJobs, collectPage } from './bid-api.js';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const kindRoutes = { '/api/notices': 'notice', '/api/news': 'news',
@@ -33,75 +23,78 @@ async function startCollection(env, lookback = 168, scheduled = false) {
   const now = Date.now(), k = kstParts(now);
   const runId = scheduled ? `${k.date}-${k.hour}-${Math.floor(k.minute / 5)}` : crypto.randomUUID();
   const deadline = scheduled ? Date.parse(`${k.date}T09:55:00+09:00`) : now + 300000;
-  const response = await getContainer(env.COLLECTOR, 'collector-0').fetch(new Request(
-    'http://container/sources', { signal: AbortSignal.timeout(20000) }));
-  if (!response.ok) throw new Error('collector_manifest_unavailable');
-  const manifest = await response.json();
-  if (!Array.isArray(manifest) || manifest.length < 1 || manifest.length > 100)
-    throw new Error('invalid_source_manifest');
+  if (!env.DATA_GO_KR_SERVICE_KEY) throw new Error('missing_api_key');
+  const used = await env.DB.prepare('SELECT COUNT(DISTINCT run_id) AS total FROM collection_jobs WHERE created_at>=?')
+    .bind(Date.parse(`${k.date}T00:00:00+09:00`)).first();
+  if (used.total >= 2) throw new Error('trial_daily_run_limit');
+  const manifest = initialJobs(now, lookback);
+  const tasks = [];
   for (const source of manifest) {
-    if (!/^[a-z0-9-]+$/.test(source.id)) throw new Error('invalid_source_id');
-    const id = `${runId}:${source.id}`;
-    const inserted = await env.DB.prepare(`INSERT OR IGNORE INTO collection_jobs
-      (id,run_id,source_id,label,created_at,deadline,updated_at) VALUES (?,?,?,?,?,?,?)`)
-      .bind(id, runId, source.id, source.label, now, deadline, now).run();
-    if (!inserted.meta.changes) continue;
-    try {
-      await env.COLLECTION_QUEUE.send({ id, source_id: source.id, lookback, deadline });
-    } catch {
-      await env.DB.prepare("UPDATE collection_jobs SET state='enqueue_failed',error='queue_unavailable' WHERE id=?").bind(id).run();
-      // Explicit error state, never reported as a successful zero-row source.
-    }
+    const id = `${runId}:${source.source_id}:${source.start_date}`;
+    tasks.push({ id, ...source });
+  }
+  for (let i = 0; i < tasks.length; i += 20) {
+    await env.DB.batch(tasks.slice(i, i + 20).map(source => env.DB.prepare(`INSERT OR IGNORE INTO collection_jobs
+      (id,run_id,source_id,label,created_at,deadline,updated_at,start_date,end_date,candidates,kept,filtered)
+      VALUES (?,?,?,?,?,?,?,?,?,0,0,0)`).bind(source.id, runId, source.source_id, source.label,
+        now, deadline, now, source.start_date, source.end_date)));
+  }
+  try {
+    await env.COLLECTION_QUEUE.sendBatch(tasks.map(task => ({ body: { id: task.id, page: 1 } })));
+  } catch {
+    await env.DB.prepare("UPDATE collection_jobs SET state='enqueue_failed',error='queue_unavailable' WHERE run_id=?")
+      .bind(runId).run();
   }
   return { run_id: runId, status_url: `/api/trial/jobs?run_id=${runId}`, deadline };
 }
 
 async function consume(message, env) {
-  const job = message.body;
-  const persisted = await env.DB.prepare('SELECT * FROM collection_jobs WHERE id=?').bind(job.id).first();
-  if (!persisted || persisted.source_id !== job.source_id) { message.ack(); return; }
+  const task = message.body;
+  if (!task || typeof task.id !== 'string' || !Number.isInteger(task.page)) { message.ack(); return; }
+  const persisted = await env.DB.prepare('SELECT * FROM collection_jobs WHERE id=?').bind(task.id).first();
+  if (!persisted || ['succeeded','failed','expired','enqueue_failed'].includes(persisted.state)) { message.ack(); return; }
   if (Date.now() >= persisted.deadline) {
-    await env.DB.prepare("UPDATE collection_jobs SET state='expired' WHERE id=? AND state<>'succeeded'").bind(job.id).run();
+    await env.DB.prepare("UPDATE collection_jobs SET state='expired' WHERE id=? AND state<>'succeeded'").bind(task.id).run();
     message.ack(); return;
   }
-  const claimed = await env.DB.prepare(`UPDATE collection_jobs SET state='running',updated_at=?,attempts=attempts+1
-    WHERE id=? AND state IN ('queued','retrying')`).bind(Date.now(), job.id).run();
-  if (!claimed.meta.changes) { message.ack(); return; }
+  // If publishing the next page failed after commit, redelivery repairs it.
+  if (task.page < persisted.next_page) {
+    await env.COLLECTION_QUEUE.send({ id: task.id, page: persisted.next_page });
+    message.ack(); return;
+  }
+  const claimed = await env.DB.prepare(`UPDATE collection_jobs SET state='running',updated_at=?,lease_until=?,attempts=attempts+1
+    WHERE id=? AND next_page=? AND (state IN ('queued','retrying') OR (state='running' AND lease_until<?))`)
+    .bind(Date.now(), Date.now() + 45000, task.id, task.page, Date.now()).run();
+  if (!claimed.meta.changes) { message.retry({ delaySeconds: 45 }); return; }
   try {
-    const shard = [...job.source_id].reduce((n, c) => n + c.charCodeAt(0), 0) % 2;
-    const timeout = Math.min(180, Math.floor((persisted.deadline - Date.now()) / 1000) - 15);
-    if (timeout <= 0) throw new Error('deadline_exceeded');
-    const response = await getContainer(env.COLLECTOR, `collector-${shard}`).fetch(new Request('http://container/collect', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_id: job.source_id, lookback: job.lookback, timeout }),
-      signal: AbortSignal.timeout((timeout + 10) * 1000),
-    }));
-    if (!response.ok) throw new Error('collector_http_failure');
-    const result = await response.json();
-    validateResult(result, job.source_id);
-    if (!result.ok) throw new Error(result.error || 'source_failed');
+    const budget = await env.DB.prepare(`INSERT INTO trial_budget (day,pages) VALUES (?,1)
+      ON CONFLICT(day) DO UPDATE SET pages=pages+1 WHERE pages<1000`).bind(kstParts().date).run();
+    if (!budget.meta.changes) throw new Error('trial_daily_page_limit');
+    const result = await collectPage(persisted, env.DATA_GO_KR_SERVICE_KEY);
     if (Date.now() >= persisted.deadline) throw new Error('deadline_exceeded');
     const collectedAt = new Date().toISOString();
-    // ponytail: 50-row D1 batches. Incremental commits intentionally survive later failure.
-    for (let i = 0; i < result.rows.length; i += 50) {
-      const chunk = result.rows.slice(i, i + 50);
-      await env.DB.batch(chunk.map(row => env.DB.prepare(`INSERT INTO items
+    // One page + checkpoint in one D1 transaction. Retrying cannot double-count.
+    const writes = result.rows.map(row => env.DB.prepare(`INSERT INTO items
         (kind,source,source_key,variant,published_at,payload,collected_at) VALUES (?,?,?,?,?,?,?)
         ON CONFLICT(kind,source,source_key,variant) DO UPDATE SET
         published_at=excluded.published_at,payload=excluded.payload,collected_at=excluded.collected_at`)
-        .bind(result.kind, row.source, String(row.source_key), row.stage || row.record_type || '',
-          row.published_at || row.recorded_at || '', JSON.stringify(row), collectedAt)));
-    }
-    await env.DB.prepare(`UPDATE collection_jobs SET state='succeeded',updated_at=?,candidates=?,kept=?,filtered=?,error=''
-      WHERE id=?`).bind(Date.now(), result.candidates, result.kept, result.filtered, job.id).run();
+        .bind('notice', row.source, row.source_key, '', row.published_at, JSON.stringify(row), collectedAt));
+    writes.push(env.DB.prepare(`UPDATE collection_jobs SET state=?,updated_at=?,candidates=candidates+?,kept=kept+?,
+      filtered=filtered+?,upstream_total=?,next_page=next_page+1,lease_until=0,error='' WHERE id=?`)
+      .bind(result.more ? 'queued' : 'succeeded', Date.now(), result.candidates, result.rows.length,
+        result.filtered, result.total, task.id));
+    await env.DB.batch(writes);
+    if (result.more) await env.COLLECTION_QUEUE.send({ id: task.id, page: task.page + 1 });
     message.ack();
   } catch (error) {
-    const retry = message.attempts < 2 && Date.now() + 45000 < persisted.deadline;
+    const checkpoint = await env.DB.prepare('SELECT next_page FROM collection_jobs WHERE id=?').bind(task.id).first();
+    if (checkpoint.next_page > task.page) { message.retry({ delaySeconds: 5 }); return; }
+    const retry = message.attempts < 3 && Date.now() + 30000 < persisted.deadline;
     // Never log arbitrary exception text: upstream URLs may contain API credentials.
-    const code = /^[a-z_]+$/.test(error.message) ? error.message : 'collection_failed';
-    await env.DB.prepare('UPDATE collection_jobs SET state=?,error=?,updated_at=? WHERE id=?')
-      .bind(retry ? 'retrying' : 'failed', code, Date.now(), job.id).run();
-    if (retry) message.retry({ delaySeconds: 30 }); else message.ack();
+    const code = /^[a-z_0-9]+$/.test(error.message) ? error.message : 'collection_failed';
+    await env.DB.prepare('UPDATE collection_jobs SET state=?,error=?,updated_at=?,lease_until=0 WHERE id=?')
+      .bind(retry ? 'retrying' : 'failed', code, Date.now(), task.id).run();
+    if (retry) message.retry({ delaySeconds: 10 }); else message.ack();
   }
 }
 
@@ -115,8 +108,12 @@ async function stats(env) {
     revised_count: notices.filter(x => x.notice_type === '개정').length,
     construction_news_count: news.filter(x => x.category !== '법규·제도 개정').length,
     law_news_count: news.filter(x => x.category === '법규·제도 개정').length,
-    app_version: 'cloudflare-trial', scheduler_enabled: false, collection_running: false,
+    app_version: 'cloudflare-free-trial', scheduler_enabled: false, collection_running: false,
     last_collect_date: '', last_public_bid_collect_date: '', trial: true,
+    credential_configured: Boolean(env.DATA_GO_KR_SERVICE_KEY),
+    collection_status: env.DATA_GO_KR_SERVICE_KEY ? 'ready' : 'awaiting_credential_authorization',
+    supported_sources: ['나라장터', '누리장터'],
+    unsupported_features: ['지원COK','뉴스','법규','사전 사업정보','공사비 분석','관리자 설정','자동메일'],
   };
   for (const [key, name] of Object.entries({ g2b: '나라장터', nuri: '누리장터', lh: 'LH',
     ex: '도로공사', kwater: 'K-water', kapt: '공동주택관리정보시스템', jiwoncok: '지원COK' }))
@@ -130,6 +127,8 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      if (request.method === 'GET' && url.pathname === '/api/notices' && !env.DATA_GO_KR_SERVICE_KEY)
+        return json({ error: '시험 서버에 API 인증키 연결 승인 대기 중입니다. 입찰공고 0건으로 확인된 것이 아닙니다.', zero_confirmed: false }, 503);
       if (request.method === 'GET' && kindRoutes[url.pathname])
         return json(filterRows(await rowsFor(env, kindRoutes[url.pathname]), url.searchParams));
       if (request.method === 'GET' && url.pathname === '/api/stats') return json(await stats(env));
@@ -160,7 +159,7 @@ export default {
       const response = await env.ASSETS.fetch(request);
       if (!response.headers.get('Content-Type')?.includes('text/html')) return response;
       return new HTMLRewriter().on('body', { element(element) {
-        element.prepend('<aside style="padding:14px;background:#fff0d9;color:#492c00;text-align:center">Cloudflare 이전 시험판 · 운영과 별도 데이터 · 관리자 설정/실제 메일 발송 미지원</aside>', { html: true });
+        element.prepend(`<aside style="padding:14px;background:#fff0d9;color:#492c00;text-align:center">Cloudflare 무료 시험판 — 나라장터·누리장터 수집 시험 ${env.DATA_GO_KR_SERVICE_KEY ? '' : '(API 인증키 연결 승인 대기)'}<br>지원COK·뉴스·법규 등 나머지 탭은 미연결이며 0건 확인을 의미하지 않습니다. 관리자 설정·자동메일 미지원.</aside>`, { html: true });
       } }).transform(response);
     } catch {
       return json({ error: 'trial_backend_unavailable', zero_confirmed: false }, 503);

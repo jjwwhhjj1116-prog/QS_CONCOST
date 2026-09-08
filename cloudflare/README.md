@@ -1,106 +1,80 @@
-# Cloudflare 이전 시험판 — 운영 전환 금지
+# Cloudflare 무료 이전 시험판
+브랜치: `codex/cloudflare-migration`. 운영 Render/main/DNS/예약메일은 변경하지 않았다.
 
-브랜치: `codex/cloudflare-migration`. Render/main/운영 DNS/GitHub 예약메일은 변경하지 않음.
-이 브랜치는 **1차 수집·저장·조회 분리 실험**이며 전체 기능 이전 완료본이 아니다.
+시험 주소: https://concost-migration-trial.jjwwhhjj1116.workers.dev
+
+## 현재 단계
+**무료 Worker + D1 + Queue 배포 완료. API 인증키 전송 승인 대기로 실수집 검증 전.**
+유료 Containers/SDK/Docker 의존성을 배포 구성에서 제거했다.
+실제 메일 발송 코드/키는 없고, 크론도 비활성화했다. 이 시험판을 운영으로 전환하면 안 된다.
 
 ## 구조
+동일한 웹 화면 → Worker 조회 API → D1
+수집 요청 → Queue → Worker가 나라장터·누리장터 API 한 페이지 조회 → D1 저장 → 다음 페이지 Queue
 
-동일 웹사이트 → Worker 정적 화면/조회 API → D1 저장 자료
+- 5개 API 분야(나라장터 공사/용역, 누리장터 공사/용역/기타), 날짜별 분리.
+- 한 번에 20건. 무료 CPU 제한을 고려한 크기이며 실제 CPU 사용량 검증은 아직 필요.
+- 이전 Python 적합도 사전은 JSON으로 공유하며 JS 판정과 점수·사유 일치 테스트를 수행.
+- 40점 이상 + 안전진단 서울 제한을 유지. 기존 지역 판별의 동명 자치구 문제는 별도 검수 대상.
+- 수동 수집 5분 기한. API 호출 15초 제한. 수집 페이지마다 데이터와 다음 페이지 번호를 원자적으로 저장.
+- Queue 중복 전달/일시 실패는 페이지 체크포인트와 짧은 임대로 처리.
+- API 오류, 빈 응답, 페이지 누락, 필터 제외, 기한 초과를 구분.
+- 일일 시험 수집 2회 / API 페이지 1,000회 상한. 계정 전체 무료 한도는 다른 앱과 공유됨.
+- 상한/기한에 걸리면 부분 결과를 보존하고 실패/만료로 표시하며 완전 수집으로 주장하지 않는다.
+- 운영 메일은 보내지 않음. `/api/trial/digest`는 게시일이 오늘인 데이터의 JSON 미리보기만 반환.
 
-수집 요청 → Queue 기관별 작업 → Cloudflare Container의 기존 Python 파서 → D1
+## 미완료 범위
+지원COK/뉴스/법규/LH/K-apt/도로공사/K-water/사전 사업정보/공사비 분석의 Workers 수집기는 아직 미이전.
+관리자 로그인/주소록/설정 저장/관심 상태/실제 메일/운영 스케줄도 미이전.
+기존 화면을 재사용하므로 탭이 남아 있지만 **미연결 탭의 0은 수집 결과가 아니다**.
+상단 시험 안내와 API 미설정 오류로 이를 명시한다.
 
-크롤러는 Render가 아니라 Cloudflare Containers에서 실행하도록 구성했다.
-Python 파서와 적합도 규칙은 재사용한다. 웹 서버/SQLite/관리자 로그인/메일 발송은
-크롤러 프로세스에 포함하지 않는다. 기관당 최대 180초, 수동 작업은 접수 시점부터
-5분 기한으로 설정하며, 대기 작업도 기한이 지나면 expired가 된다.
-지원COK 원기관은 하나의 큰 작업이 아니라 URL 기준으로 독립 실행한다.
+## 검증 (2026-09-08)
+- Python 회귀·교차 런타임 검증 93개 통과.
+- Node 날짜/응답/페이지/적합도 검증 11개 통과.
+- 무료 Worker 빌드 및 workers.dev 실제 배포 성공.
+- 신규 무료 trial D1 스키마 적용 성공; trial Queue 2개 생성.
+- 실제 브라우저와 공개 상태 API에서 인증키 승인 대기 상태 확인. 화면에 0건 확정으로 표시하지 않음.
+- 기존 유료 시제품의 로컬 Python 실행에서 나라장터 8건/누리장터 4건을 확인한 이력은 있으나,
+  **이 결과는 무료 Worker 실환경 수집 결과가 아니다**.
+- 실환경 API 수집/Queue 처리/CPU 한도/원문 링크 대조는 인증키 연결 승인 뒤 수행해야 한다.
+- 결제/플랜 업그레이드/운영 도메인 전환/메일 발송은 하지 않았다.
 
-## 먼저 확인한 문제 / 범위
+## 다음에 필요한 승인
+보안 승인 단계에서 기존 `DATA_GO_KR_SERVICE_KEY`를 새 시험 Worker Secret으로
+전송·영구 저장하는 작업이 차단됐다. 사용자에게 해당 목적지로 키를 옮기는 승인을 받아야 한다.
+키는 현재 전송되지 않았다. 승인을 우회하는 다른 경로로 업로드하지 않는다.
 
-- 기존 `Future.cancel()`은 실행 중인 스레드를 정지하지 못한다. 새 실행부는
-  별도 프로세스를 종료하고 회수한다. 일부 파서가 남긴 스레드도 최종 JSON 출력 후 종료한다.
-- 기존 서버 내부 작업 상태는 재시작에 취약하다. 시험판 작업 상태와 자료는 D1에 남긴다.
-- 기관 오류/시간초과/적합도 제외/정상 빈 응답을 별도 기록한다.
-- 지원COK 게시일 누락 시 오늘로 채우던 처리를 제거했다. 날짜가 하나뿐이면
-  게시일만 기록하고 임의로 마감일을 만들지 않는다.
-- 후보 수는 원기관 전체 공고 수가 아니라 **기존 파서가 반환한 후보 수**다.
-- 기존 파서 내부의 페이지 상한, 날짜 해석, 부분 오류 은폐, 서울 지역 판별은
-  아직 전 기관 대조 검증 전이다. 호스팅 변경으로 수집 완전성이 보장되지 않는다.
-- 뉴스/법규/사전정보/공사비 파서 호출 경로는 포함했지만 Cloudflare 실환경 검증 전이다.
+승인 후에만 repo root에서:
+```powershell
+python -X utf8 cloudflare/live_check.py https://concost-migration-trial.jjwwhhjj1116.workers.dev --install-trial-secrets
+```
+이 명령은 API 키를 시험 Worker Secret으로 저장하고 시험 관리자 토큰을 회전시킨 뒤 실제 수집을 실행한다.
+키는 CLI stdin/인증 헤더로만 전달하며 파일/출력에 남기지 않는다. 메일 키는 복사하지 않는다.
 
-## 현재 안전장치
-
-- `SCHEDULE_ENABLED=false`, `triggers.crons=[]`.
-- 메일은 당일 자료 JSON 미리보기만 가능. Resend 호출 코드/발송 키가 없다.
-- 기존 관리자 설정·주소록 변경·관심 상태 변경·로그인 기능은 아직 미이전:
-  HTTP 501을 반환하며 화면 상단에 시험판 제한을 표시한다.
-- 시험 수집/작업 상태/메일 미리보기는 `TRIAL_ADMIN_TOKEN` Bearer 인증 필수.
-- API 인증키는 Worker Secrets에서 Container 환경으로만 전달.
-- 이미지에는 `.env`, DB, Git 이력을 넣지 않는다. 원본 API 응답(raw)은 저장하지 않는다.
-- Docker는 기존 모듈만 복사하며 기존 `serve`/자동메일을 시작하지 않는다.
-- Worker/D1/Queue 이름에 모두 trial을 사용. 운영 도메인 route는 없다.
-
-## 로컬 검증
-
+## 재현 명령
 ```powershell
 python -m unittest discover -s tests -q
 cd cloudflare
 npm ci --ignore-scripts
 npm test
+npx wrangler deploy --dry-run
 npx wrangler d1 migrations apply concost-migration-trial --local
-npx wrangler dev --local --enable-containers=false --port 8791
+npx wrangler dev --local
 ```
+`tender_radar/isolated_collector.py`는 이전 Python 결과를 대조하는 로컬 진단용으로만 남겼다.
+무료 Worker에서는 실행되지 않는다. Docker 설치나 Workers Paid가 필요하지 않다.
 
-이 로컬 명령은 Worker/D1 조회만 시험한다. `--enable-containers=false`에서는
-수집 Queue→Container 통합이 동작하지 않는다. Windows Container 개발은 WSL/Docker 환경이 필요하다.
+## 운영 전환 합격 조건
+1. 실제 API의 전체 페이지 수/후보 수/선별 수를 원문과 대조하고 CPU/Queue/D1 제한 확인.
+2. 중복 전달·재시작·시간초과 중 부분 데이터 보존과 화면 표시 확인.
+3. 나머지 기관 및 관리자/주소록/설정/메일 기능 순서대로 이전.
+4. 영구 발송 이력/날짜별 원자적 잠금/Resend idempotency 검증 후 승인된 시험 수신자에게만 발송.
+5. 사용자 승인 뒤에만 운영 예약을 한 곳으로 통합하고 도메인 전환.
 
-```powershell
-# Worker 번들만 검증 (실제 배포 아님)
-npx wrangler deploy --dry-run --containers-rollout=none
-# Python 수집 컨테이너 이미지 검증: Docker Engine 실행 필요, repo root에서 실행
-docker build -f cloudflare/Collector.Dockerfile -t concost-collector-trial .
-```
+예약은 목표 시각이며 외부 지연과 수신함 도착 시각까지 정각임을 보장하지 않는다.
 
-## 클라우드 배포 전 필요한 승인/설정
-
-2026-09-08 Wrangler 계정 조회: 로그인은 유효하나 Containers 목록 조회에서
-`Workers Paid plan required`로 거부됨. 결제/업그레이드는 실행하지 않았다.
-공식 요금: https://developers.cloudflare.com/containers/platform/pricing/
-
-Workers Paid 승인/가입 후 **시험용** D1/Queue를 만들고 config의 0으로 된
-database_id를 실제 trial ID로 교체해야 한다. Docker Engine도 실행해야 한다.
-필요한 Secret은 `TRIAL_ADMIN_TOKEN`, `DATA_GO_KR_SERVICE_KEY`, `LAW_API_OC`이다.
-운영 자동메일 키는 이 시험판에 복사하지 않는다.
-
-시험 수집: `POST /api/trial/collect`에 `{ "lookback_hours": 168 }`.
-반환된 status_url로 조회. `GET /api/trial/digest`는 메일을 보내지 않는다.
-토큰은 `Authorization: Bearer ...` 헤더로만 전달한다.
-
-## 검증 기록 (2026-09-08, 회사 PC에서 실행)
-
-| 항목 | 확인 결과 |
-|---|---|
-| 기존 회귀 + Python 신규 테스트 | 90개 통과 |
-| Worker 날짜/필터/오류 구분 테스트 | 5개 통과 |
-| Wrangler Worker dry-run | 통과 (Container 이미지 제외) |
-| 로컬 D1 스키마 적용 | 통과 |
-| Worker 재시작 후 D1 조회 | 시험 레코드 보존 확인; 검증 후 시험 레코드 삭제 |
-| 시험 API 인증/메일 미리보기 | 미인증 401, 인증 후 당일 JSON 확인, 발송 없음 |
-| 나라장터 독립 프로세스 실제 조회 | 파서 후보 156건 → 적합 8건, 약 18초 |
-| 누리장터 독립 프로세스 실제 조회 | 4건 → 4건, 약 6초 |
-| 지원COK 부산 정비 원기관 | 후보 5건 → 기준 제외 5건, 약 0.8초 |
-| 지원COK 부산광역시 원기관 | 파서 반환 0건, 약 1.5초 (사이트 전체 0건이라는 의미 아님) |
-| Cloudflare 실배포/발신 | 미실시: 유료 플랜 승인 대기 |
-
-## 운영 전환 합격 조건 — 아직 완료되지 않음
-
-1. 모든 원기관별 실환경 상태/페이지 범위/날짜/적합도/링크를 원문과 대조.
-2. Queue→Container→D1→실제 화면 E2E, D1 재시작 보존, 느린 기관 종료 검증.
-3. 관리자 인증·주소록·발신 설정·API 키 저장·관심 상태 기능을 이전하고 회귀 검증.
-4. 09:00~09:55 수집과 10:00 메일을 독립 실행. 한국시간/평일/당일 자료만 적용.
-5. 영구 발송 이력 + 날짜별 원자적 잠금 + Resend idempotency 검증.
-6. 승인된 시험 수신자에게만 실제 발송하고 이후 운영 예약을 **한 곳만** 활성화.
-7. 사용자가 전환 승인한 후 GitHub/Render 기존 예약 중지 및 도메인 전환.
-
-예약 시각은 발송 요청의 목표 시각이다. 외부 스케줄러 지연·메일 서버 수신 시각까지
-정확히 10:00임을 보장하지 않는다. 늦은 재발송 정책은 운영 전환 때 명시적으로 결정한다.
+공식 무료 한도:
+- https://developers.cloudflare.com/workers/platform/limits/
+- https://developers.cloudflare.com/d1/platform/pricing/
+- https://developers.cloudflare.com/queues/platform/pricing/
