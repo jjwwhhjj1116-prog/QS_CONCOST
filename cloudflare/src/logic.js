@@ -27,12 +27,19 @@ export function filterRows(rows, params) {
     (!query || [row.title, row.institution, row.region].join(' ').toLowerCase().includes(query)));
 }
 
+export function dateOnly(value) {
+  const m=String(value||'').match(/(20\d{2})[.\-/년\s]*(\d{2})[.\-/월\s]*(\d{2})/);
+  if(!m)return '';
+  const value2=`${m[1]}-${m[2]}-${m[3]}`;
+  const date=new Date(value2+'T00:00:00Z');
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0,10)===value2 ? value2 : '';
+}
 export function todayDigest(rows, time = Date.now()) {
   const today = kstParts(time).date;
   // Missing publication date is unknown, NOT newly published today.
-  return rows.filter(row => row.published_at?.slice(0, 10) === today &&
+  return rows.filter(row => dateOnly(row.published_at) === today &&
     !['취소', '마감'].includes(row.notice_type) &&
-    (!row.deadline_at || row.deadline_at.slice(0, 10) >= today));
+    (!dateOnly(row.deadline_at) || dateOnly(row.deadline_at) >= today));
 }
 
 export function validateResult(result, source) {

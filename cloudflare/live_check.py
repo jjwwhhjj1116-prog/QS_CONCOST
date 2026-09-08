@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tender_radar.config import get_settings
+from tender_radar.secrets_store import get_secret
 
 
 def main():
@@ -27,13 +28,22 @@ def main():
     host = urlsplit(base)
     if host.scheme != 'https' or host.netloc != 'concost-migration-trial.jjwwhhjj1116.workers.dev' or host.path:
         raise SystemExit('Only the confirmed migration trial URL is allowed')
-    credential = get_settings().service_key
+    settings = get_settings()
+    credential = settings.service_key
     if not credential:
         raise SystemExit('Local DATA_GO_KR_SERVICE_KEY not configured')
     token = secrets.token_urlsafe(40)
     cli = ROOT / 'cloudflare/node_modules/wrangler/bin/wrangler.js'
+    existing = subprocess.run([shutil.which('node'), str(cli), 'secret', 'list'], cwd=ROOT / 'cloudflare', capture_output=True, encoding='utf-8', check=True)
+    names = {row['name'] for row in json.loads(existing.stdout)}
+    values = {'DATA_GO_KR_SERVICE_KEY': credential, 'TRIAL_ADMIN_TOKEN': token}
+    law = get_secret(settings.db_path, 'law_api_oc')
+    if law:
+        values['LAW_API_OC'] = law
+    if 'SETTINGS_ENCRYPTION_KEY' not in names:
+        values['SETTINGS_ENCRYPTION_KEY'] = secrets.token_hex(32)
     result = subprocess.run([shutil.which('node'), str(cli), 'secret', 'bulk'],
-        cwd=ROOT / 'cloudflare', input=json.dumps({ 'DATA_GO_KR_SERVICE_KEY': credential, 'TRIAL_ADMIN_TOKEN': token }),
+        cwd=ROOT / 'cloudflare', input=json.dumps(values),
         capture_output=True, encoding='utf-8')
     if result.returncode:
         raise SystemExit('Trial secret installation failed; inspect Wrangler status (credentials not printed)')
@@ -56,7 +66,9 @@ def main():
             if error.code != 401 or attempt == 11:
                 raise SystemExit(f'Trial authentication probe failed: HTTP {error.code}') from None
             time.sleep(5)
-    started = call('/api/trial/collect', {'lookback_hours': 168})
+    lookback = int(sys.argv[sys.argv.index('--lookback') + 1]) if '--lookback' in sys.argv else 168
+    scope = sys.argv[sys.argv.index('--scope') + 1] if '--scope' in sys.argv else 'all'
+    started = call('/api/trial/collect', {'lookback_hours': lookback, 'scope': scope})
     print(json.dumps(started), flush=True)
     previous = None
     while time.time() * 1000 < started['deadline'] + 10000:

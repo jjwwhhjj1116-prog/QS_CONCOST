@@ -1,5 +1,23 @@
-# Cloudflare 무료 이전 시험판
-브랜치: `codex/cloudflare-migration`. 운영 Render/main/DNS/예약메일은 변경하지 않았다.
+# Cloudflare 무료 이전 사이트
+브랜치: `codex/cloudflare-migration`. 도메인/DNS와 main 소스는 아직 전환하지 않았다.
+
+## 2026-09-08 자동메일 전환 (현재 설정)
+- 사용자 요청에 따라 Cloudflare 자체 Cron을 활성화: 월~금 KST 09:00 수집 시작(09:55 기한), 10:00 메일.
+- `MAIL_MODE=live`, `SCHEDULE_ENABLED=true`. 관리자 세션 없이 실행한다.
+- 기존 Render 주소로 보내는 GitHub workflow 307850329는 disabled_manually.
+- Render 사이트 자동발송 중지 및 내부 `SCHEDULE_JOBS=0` 저장 적용. 키/주소록은 삭제하지 않음.
+- Render의 승인된 3개 환경변수를 Worker Secret으로 복사했으며 수신자 7명을 D1에 한 번만 가져왔다.
+- 전용 `concost-mail-dispatch` Queue 사용: 수집 Queue 정체와 메일을 분리.
+- 당일 원문 게시일이 확인된 자료만 메일에 포함. 오늘 자료가 없으면 `no_verified_today_items`를 남기고 과거 자료를 재발송하지 않음.
+- 날짜/수신자 DB 유일키 + Resend idempotency key; 재전달 시 접수 완료 건은 재발송하지 않음.
+- `/api/automation/status`는 주소/키를 제외한 예약·발송 상태 확인용. 접수 성공은 받은편지함 도착과 다르다.
+- Node 26개 검증 통과(로그인 없는 Cron, 주소록 영속성, 중복 발송, 지연/빈 자료 차단 포함). 실제 수신 검증은 아직 안 함.
+- 2026-09-09 10:00 KST Codex 확인 예약 ID `10-concost` 생성. 실패 시 자동 재발송하지 않음.
+- 배포 버전: `88371bfd-1f64-4f44-ad57-918cb266c20b`.
+- 아직 미완료: Cloudflare 관리자 비밀번호 설정, 일부 원기관 TLS/HTTP400/시간초과, 전체 자료 포괄성·무료 CPU 검증.
+- 이후 추가된 뉴스/법령/직접기관/LH/K-water/K-apt/도로공사/사업정보 수집기는 부분 성공 상태이며 모든 기관 성공으로 보지 않는다.
+
+## 아래는 자동메일 전환 전 최초 시험 기록 (현재 설정이 아님)
 
 시험 주소: https://concost-migration-trial.jjwwhhjj1116.workers.dev
 
