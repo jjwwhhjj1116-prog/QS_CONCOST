@@ -5,3 +5,7 @@ data/*.db
 data/*.db-*
 work/
 *.log
+node_modules/
+.wrangler/
+.dev.vars*
+outputs/cloudflare-dry-run/

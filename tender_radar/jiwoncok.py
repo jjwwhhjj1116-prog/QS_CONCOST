@@ -346,7 +346,6 @@ def _same_site(url: str, base_url: str) -> bool:
 def parse_source_page(html_text: str, base_url: str, institution: str = "") -> list[dict[str, Any]]:
     parser = _AnchorParser()
     parser.feed(html_text or "")
-    today = datetime.now(SEOUL_TZ).date().isoformat()
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for link in parser.links:
@@ -362,13 +361,15 @@ def parse_source_page(html_text: str, base_url: str, institution: str = "") -> l
         dates = title_dates or DATE_RE.findall(context)
         if title_dates:
             title = _clean(DATE_RE.sub("", title))
-        published_at = today
+        # Unknown is not today: preserve uncertainty for today-only digests.
+        published_at = ""
         deadline = ""
         if dates:
             first_year, first_month, first_day = dates[0]
             published_at = f"{first_year}-{int(first_month):02d}-{int(first_day):02d}"
-            last_year, last_month, last_day = dates[-1]
-            deadline = f"{last_year}-{int(last_month):02d}-{int(last_day):02d}"
+            if len(dates) > 1:
+                last_year, last_month, last_day = dates[-1]
+                deadline = f"{last_year}-{int(last_month):02d}-{int(last_day):02d}"
         score, matched = score_notice(title, institution, context, SOURCE)
         rows.append({
             "source": SOURCE,
@@ -441,7 +442,7 @@ def parse_busan_redevelopment_page(
             "category": _category_for(title, matched),
             "title": title,
             "institution": institution,
-            "published_at": published.group(1) if published else datetime.now(SEOUL_TZ).date().isoformat(),
+            "published_at": published.group(1) if published else "",
             "deadline_at": "",
             "estimated_price": None,
             "region": "부산",

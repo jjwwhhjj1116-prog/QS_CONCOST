@@ -1,0 +1,12 @@
+{
+  "name": "concost-cloudflare-trial",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": { "@cloudflare/containers": "^0.3.0" },
+  "devDependencies": { "wrangler": "^4.0.0" }
+}
