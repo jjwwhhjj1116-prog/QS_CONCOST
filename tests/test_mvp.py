@@ -61,14 +61,15 @@ class MVPTests(unittest.TestCase):
             self.assertFalse(auto_collect_on_start_enabled())
 
     def test_empty_render_database_can_restore_public_bid_snapshot(self):
+        today = datetime.now(SEOUL)
         row = {
             "source": "나라장터",
             "source_key": "snapshot-1",
             "category": "용역",
             "title": "재건축 정비사업 공사비 검증 용역",
             "institution": "정비사업조합",
-            "published_at": "2026-08-11T09:00:00+09:00",
-            "deadline_at": "2026-08-20T17:00:00+09:00",
+            "published_at": today.isoformat(timespec="seconds"),
+            "deadline_at": (today + timedelta(days=10)).isoformat(timespec="seconds"),
             "region": "서울",
             "url": "https://example.test/notice/1",
             "score": 80,
@@ -84,6 +85,24 @@ class MVPTests(unittest.TestCase):
             self.assertEqual(counts["inserted"], 1)
             self.assertEqual(stats(db)["total"], 1)
 
+    def test_stale_public_bid_snapshot_is_not_restored(self):
+        row = {
+            "source": "나라장터", "source_key": "stale-snapshot", "category": "용역",
+            "title": "과거 재건축 공사비 검증 용역", "institution": "정비사업조합",
+            "published_at": "2026-08-11T09:00:00+09:00",
+            "deadline_at": "2026-08-20T17:00:00+09:00", "region": "서울",
+            "url": "https://example.test/notice/stale", "score": 80,
+            "matched_keywords": ["공사비 검증", "재건축"],
+        }
+        response = BytesIO(json.dumps({"rows": [row]}, ensure_ascii=False).encode("utf-8"))
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "tender_radar.server.urlopen", return_value=response
+        ):
+            db = Path(tmp) / "snapshot.db"
+            init_db(db)
+            self.assertEqual(restore_public_bid_snapshot(db)["inserted"], 0)
+            self.assertEqual(stats(db)["total"], 0)
+
     def test_manual_collection_prioritizes_opportunities_over_heavy_analysis(self):
         scopes = manual_collection_scopes()
         self.assertIn("g2b", scopes)
@@ -97,6 +116,8 @@ class MVPTests(unittest.TestCase):
 
     def test_render_scheduler_respects_explicit_setting(self):
         with patch.dict("os.environ", {"RENDER": "true", "SCHEDULE_JOBS": "true"}, clear=True):
+            self.assertFalse(internal_scheduler_enabled())
+        with patch.dict("os.environ", {"RENDER": "true", "SCHEDULE_JOBS": "force"}, clear=True):
             self.assertTrue(internal_scheduler_enabled())
         with patch.dict("os.environ", {"RENDER": "true", "SCHEDULE_JOBS": "false"}, clear=True):
             self.assertFalse(internal_scheduler_enabled())
@@ -188,6 +209,11 @@ class MVPTests(unittest.TestCase):
             Handler.collection_lock_owner = None
             if Handler.collection_lock.locked():
                 Handler.collection_lock.release()
+
+            set_setting(
+                db, "last_public_bid_collect",
+                datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+            )
 
             digest_responses = []
             digest_handler = object.__new__(Handler)
@@ -291,12 +317,56 @@ class MVPTests(unittest.TestCase):
             handler.settings = Settings("", 48, db, "127.0.0.1", 0)
             handler.path = "/api/automation/import-jiwoncok"
             handler.headers = {"Authorization": "Bearer automation-token"}
-            handler._read_json = lambda *_: {"rows": [row], "sources": []}
+            handler._read_json = lambda *_: {
+                "rows": [row], "sources": [{"source": "서울특별시", "ok": True}],
+            }
             responses = []
             handler._json = lambda payload, status=200: responses.append((payload, status))
             handler.do_POST()
             self.assertEqual(responses[0][0]["inserted"], 1)
             save_mock.assert_called_once_with(db, [row])
+
+    def test_g2b_import_marks_public_bid_fresh_only_after_real_source_completion(self):
+        row = {
+            "source": "나라장터", "source_key": "external-g2b-1", "category": "용역",
+            "title": "재건축 공사비 검증 용역", "institution": "정비사업조합", "score": 80,
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
+        ), patch(
+            "tender_radar.server.upsert_notices",
+            return_value={"inserted": 1, "updated": 0, "unchanged": 0},
+        ):
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            handler.path = "/api/automation/import-g2b"
+            handler.headers = {"Authorization": "Bearer automation-token"}
+            handler._read_json = lambda *_: {
+                "rows": [row], "completed_sources": ["나라장터"], "errors": [],
+            }
+            responses = []
+            handler._json = lambda payload, status=200: responses.append((payload, status))
+            handler.do_POST()
+            today = datetime.now(SEOUL).date().isoformat()
+            self.assertTrue(responses[0][0]["public_bid_fresh"])
+            self.assertEqual(get_setting(db, "last_public_bid_collect"), today)
+
+    def test_digest_rejects_resend_key_without_trigger_token(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"DIGEST_TRIGGER_TOKEN": "automation-token"}, clear=True
+        ):
+            db = Path(tmp) / "test.db"
+            init_db(db)
+            handler = object.__new__(Handler)
+            handler.settings = Settings("", 48, db, "127.0.0.1", 0)
+            handler.path = "/api/automation/digest"
+            handler.headers = {"X-Resend-Api-Key": "re_not_authentication"}
+            responses = []
+            handler._json = lambda payload, status=200: responses.append((payload, status))
+            handler.do_POST()
+            self.assertEqual(responses[0][1], 401)
 
     def test_qs_notice_scores_high(self):
         score, matched = score_notice("청사 신축공사 공사비 검증 및 VE 용역", "서울시")
@@ -313,6 +383,10 @@ class MVPTests(unittest.TestCase):
         ), patch("tender_radar.server.send_email_digest") as send_mock:
             db = Path(tmp) / "test.db"
             init_db(db)
+            set_setting(
+                db, "last_public_bid_collect",
+                datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+            )
             handler = object.__new__(Handler)
             handler.settings = Settings("", 48, db, "127.0.0.1", 0)
             handler.path = "/api/automation/digest"
@@ -343,6 +417,7 @@ class MVPTests(unittest.TestCase):
             init_db(db)
             today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
             set_setting(db, "last_automation_digest", today)
+            set_setting(db, "last_public_bid_collect", today)
             handler = object.__new__(Handler)
             handler.settings = Settings("", 48, db, "127.0.0.1", 0)
             handler.path = "/api/automation/digest"
@@ -1127,7 +1202,9 @@ class MVPTests(unittest.TestCase):
             db = Path(tmp) / "test.db"
             notice = normalize_item({
                 "bidNtceNo": "MAIL-1", "bidNtceNm": "공사비 검증 용역",
-                "ntceInsttNm": "테스트기관", "bidClseDt": "20260710",
+                "ntceInsttNm": "테스트기관",
+                "bidNtceDt": datetime.now(SEOUL).isoformat(timespec="seconds"),
+                "bidClseDt": (datetime.now(SEOUL) + timedelta(days=10)).isoformat(timespec="seconds"),
             }, "용역")
             upsert_notice(db, notice)
             first = build_email_digest(db)

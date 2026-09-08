@@ -11,7 +11,7 @@ import threading
 import time
 import webbrowser
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,7 +33,10 @@ from . import (
     apartment_api, expressway, g2b, jiwoncok, kapt, kwater, law_news, lh, nuri,
     official_news, procurement_intelligence,
 )
-from .email_digest import build_email_digest, send_email_digest, send_test_email, valid_email
+from .email_digest import (
+    build_email_digest, has_fresh_digest_items, send_email_digest, send_test_email,
+    valid_email,
+)
 from .jiwoncok import parse_jiwoncok_email
 from .scoring import MIN_NOTICE_SCORE, should_keep_notice
 from .secrets_store import get_secret, migrate_secret, set_secret
@@ -66,10 +69,20 @@ def restore_public_bid_snapshot(db_path: Path) -> dict[str, int]:
     with urlopen(request, timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))
     rows = payload.get("rows", []) if isinstance(payload, dict) else []
-    relevant = [
-        row for row in rows
-        if isinstance(row, dict) and should_keep_notice(row)
-    ]
+    cutoff = datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=4)
+    relevant = []
+    for row in rows:
+        if not isinstance(row, dict) or not should_keep_notice(row):
+            continue
+        match = re.search(r"(20\d{2})[-./년\s]*(\d{1,2})[-./월\s]*(\d{1,2})", str(row.get("published_at", "")))
+        if not match:
+            continue
+        try:
+            if datetime(*map(int, match.groups())).date() < cutoff:
+                continue
+        except ValueError:
+            continue
+        relevant.append(row)
     return upsert_notices(db_path, relevant)
 
 
@@ -204,10 +217,13 @@ def auto_collect_on_start_enabled() -> bool:
 
 
 def internal_scheduler_enabled() -> bool:
-    # Production keeps this lightweight KST scheduler as the primary exact-time
-    # trigger. External GitHub schedules remain a delayed backup; the daily DB
-    # marker and Resend idempotency key prevent duplicate delivery.
-    return os.getenv("SCHEDULE_JOBS", "1").strip().lower() in {"1", "true", "yes"}
+    configured = os.getenv("SCHEDULE_JOBS", "0").strip().lower()
+    # Render and GitHub must not both send the same daily email. GitHub is the
+    # single production trigger because it can wake a sleeping free web service.
+    # A future always-on Render service may opt in explicitly with "force".
+    if is_render_runtime():
+        return configured == "force"
+    return configured in {"1", "true", "yes", "force"}
 
 
 def digest_failure_code(exc: Exception) -> str:
@@ -655,6 +671,11 @@ class Handler(BaseHTTPRequestHandler):
         job = self._get_collection_job(job_id) or {}
         if job.get("ok"):
             set_setting(self.settings.db_path, "last_scheduled_collect", scheduled_date)
+        if any(
+            source.get("source") == "나라장터" and source.get("ok")
+            for source in job.get("sources", [])
+        ):
+            set_setting(self.settings.db_path, "last_public_bid_collect", scheduled_date)
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -689,6 +710,9 @@ class Handler(BaseHTTPRequestHandler):
             summary["collection_running"] = type(self).collection_lock.locked()
             summary["last_collect_date"] = get_setting(
                 self.settings.db_path, "last_scheduled_collect", ""
+            )
+            summary["last_public_bid_collect_date"] = get_setting(
+                self.settings.db_path, "last_public_bid_collect", ""
             )
             self._json(summary)
             return
@@ -894,15 +918,22 @@ class Handler(BaseHTTPRequestHandler):
                     and should_keep_notice(row)
                 ]
                 counts = upsert_notices(self.settings.db_path, rows)
-                set_setting(
-                    self.settings.db_path,
-                    "last_scheduled_collect",
-                    datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
-                )
+                completed_sources = {
+                    str(source) for source in payload.get("completed_sources", [])
+                    if isinstance(source, str)
+                }
+                today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+                if completed_sources:
+                    set_setting(self.settings.db_path, "last_scheduled_collect", today)
+                if "나라장터" in completed_sources:
+                    set_setting(self.settings.db_path, "last_public_bid_collect", today)
                 self._json({
                     "ok": True,
                     "total": len(rows),
                     "filtered": len(supplied_rows) - len(rows),
+                    "completed_sources": sorted(completed_sources),
+                    "public_bid_fresh": "나라장터" in completed_sources,
+                    "errors": payload.get("errors", [])[:20],
                     **counts,
                 })
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -926,6 +957,16 @@ class Handler(BaseHTTPRequestHandler):
                 ]
                 counts = upsert_notices(self.settings.db_path, rows)
                 sources = payload.get("sources", [])
+                source_success = bool(
+                    isinstance(sources, list)
+                    and any(isinstance(source, dict) and source.get("ok") for source in sources)
+                )
+                if not source_success:
+                    self._json({
+                        "error": "지원COK 원기관에서 정상 응답을 받은 곳이 없습니다.",
+                        "sources": sources[:100] if isinstance(sources, list) else [],
+                    }, 502)
+                    return
                 self._json({
                     "ok": True,
                     "total": len(rows),
@@ -941,10 +982,8 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/automation/digest":
             expected = os.getenv("DIGEST_TRIGGER_TOKEN", "")
             supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-            supplied_resend = self.headers.get("X-Resend-Api-Key", "").strip()
             token_ok = bool(expected and secrets.compare_digest(expected, supplied))
-            resend_header_ok = bool(supplied_resend.startswith("re_"))
-            if not token_ok and not resend_header_ok:
+            if not token_ok:
                 self._json({"error": "인증되지 않은 자동화 요청입니다."}, 401)
                 return
         if parsed.path == "/api/automation/collect":
@@ -1079,17 +1118,25 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "이미 발송 작업이 진행 중입니다."}, 409)
                 return
             try:
+                if get_setting(self.settings.db_path, "last_public_bid_collect", "") != today:
+                    set_setting(self.settings.db_path, "last_digest_status", "waiting_for_collection")
+                    self._json({
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "오늘 나라장터 실수집이 확인되지 않아 예약메일을 보류했습니다.",
+                    })
+                    return
                 # 메일 요청 경로에서는 자료 수집을 절대 동기 실행하지 않는다. 수집이 느리거나
                 # 원기관이 응답하지 않을 때 메일 발송까지 함께 멈추고 Render가 503이 되는 것을
                 # 막기 위해, 09시대에 저장된 현재 스냅샷만 즉시 발송한다.
                 preview = build_email_digest(self.settings.db_path)
                 preview_counts = preview["counts"]
-                if sum(int(value) for value in preview_counts.values()) == 0:
+                if not has_fresh_digest_items(preview_counts):
                     set_setting(self.settings.db_path, "last_digest_status", "waiting_for_data")
                     self._json({
                         "ok": True,
                         "skipped": True,
-                        "reason": "수집된 입찰공고와 당일 뉴스가 모두 0건이어서 빈 메일을 발송하지 않았습니다.",
+                        "reason": "오늘 새로 게시된 입찰공고와 뉴스가 모두 0건이어서 메일을 발송하지 않았습니다.",
                         **preview_counts,
                     })
                     return
@@ -1505,13 +1552,17 @@ def serve(settings: Settings, open_browser: bool = False) -> None:
                     last = get_setting(settings.db_path, "last_automation_digest", "")
                     enabled = get_setting(settings.db_path, "digest_enabled", "1") == "1"
                     collecting = Handler.collection_lock.locked()
+                    public_bids_collected_today = (
+                        get_setting(settings.db_path, "last_public_bid_collect", "") == today
+                    )
                     if (
                         enabled and last != today and not collecting
+                        and public_bids_collected_today
                         and Handler.digest_lock.acquire(blocking=False)
                     ):
                         try:
                             preview = build_email_digest(settings.db_path)
-                            if sum(int(value) for value in preview["counts"].values()) > 0:
+                            if has_fresh_digest_items(preview["counts"]):
                                 set_setting(
                                     settings.db_path,
                                     "last_digest_attempt",

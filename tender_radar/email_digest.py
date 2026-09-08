@@ -52,13 +52,23 @@ def _parse_date(value: object) -> datetime.date | None:
         return None
 
 
-def _is_today_news(item: dict, today: datetime.date | None = None) -> bool:
+def _is_today_item(item: dict, today: datetime.date | None = None) -> bool:
     today = today or datetime.now(SEOUL).date()
     published = _parse_date(item.get("published_at"))
     if published:
         return published == today
     first_seen = _parse_date(item.get("first_seen_at"))
     return first_seen == today
+
+
+def has_fresh_digest_items(counts: dict) -> bool:
+    """Only newly published items justify an automated daily email."""
+    return int(counts.get("new_notices", 0)) + int(counts.get("new_news", 0)) > 0
+
+
+def _is_open_notice(item: dict, today: datetime.date | None = None) -> bool:
+    deadline = _parse_date(item.get("deadline_at"))
+    return deadline is None or deadline >= (today or datetime.now(SEOUL).date())
 
 
 def _rows(db_path: Path, kind: str, already_sent: bool, limit: int, today_only: bool = False) -> list[dict]:
@@ -89,9 +99,9 @@ def _rows(db_path: Path, kind: str, already_sent: bool, limit: int, today_only: 
             item["matched_keywords"] = json.loads(item.get("matched_keywords", "[]"))
         except json.JSONDecodeError:
             item["matched_keywords"] = []
-        if kind == "notice" and not should_keep_notice(item):
+        if kind == "notice" and (not should_keep_notice(item) or not _is_open_notice(item)):
             continue
-        if today_only and kind == "news" and not _is_today_news(item):
+        if today_only and not _is_today_item(item):
             continue
         result.append(item)
         if len(result) >= limit:
@@ -167,7 +177,7 @@ def _section(title: str, subtitle: str, cards: list[str]) -> str:
 
 def build_email_digest(db_path: Path, website_url: str = "https://qs-concost.onrender.com/") -> dict:
     init_db(db_path)
-    new_notices = _rows(db_path, "notice", False, 30)
+    new_notices = _rows(db_path, "notice", False, 30, today_only=True)
     old_notices = _rows(db_path, "notice", True, 12)
     new_news = _rows(db_path, "news", False, 20, today_only=True)
     old_news: list[dict] = []
@@ -223,6 +233,13 @@ def send_email_digest(
     subject_prefix: str = "",
 ) -> dict:
     digest = build_email_digest(db_path, website_url)
+    if not has_fresh_digest_items(digest["counts"]):
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "오늘 새로 게시된 입찰공고와 뉴스가 없어 메일을 발송하지 않았습니다.",
+            **digest["counts"],
+        }
     if subject_prefix.strip():
         prefix = subject_prefix.strip()
         digest["subject"] = f"{prefix} {digest['subject']}"

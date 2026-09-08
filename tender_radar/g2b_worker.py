@@ -27,7 +27,7 @@ def main() -> None:
         lookback_hours = 72
 
     rows: list[dict] = []
-    completed = 0
+    completed_sources: list[str] = []
     errors: list[str] = []
     for source, collect in (
         ("나라장터", g2b.collect_recent),
@@ -35,15 +35,15 @@ def main() -> None:
     ):
         try:
             rows.extend(collect(service_key, lookback_hours))
-            completed += 1
+            completed_sources.append(source)
         except Exception as exc:
             errors.append(f"{source}: {exc}")
-    if completed == 0:
+    if not completed_sources:
         raise SystemExit(" / ".join(errors) or "공공데이터 수집 실패")
 
     filtered = [row for row in rows if should_keep_notice(row)]
     payload = json.dumps(
-        {"rows": filtered, "errors": errors},
+        {"rows": filtered, "errors": errors, "completed_sources": completed_sources},
         ensure_ascii=False,
     ).encode("utf-8")
     request = Request(

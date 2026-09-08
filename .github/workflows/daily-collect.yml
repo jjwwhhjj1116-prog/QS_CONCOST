@@ -114,12 +114,15 @@ jobs:
               echo "Public bid API attempt $attempt failed; retrying after a short delay."
               sleep $((attempt * 10))
             done
-            test "$g2b_ok" = "true"
           fi
 
           if [ "$external_jiwoncok" = "true" ]; then
             echo "JiwonCOK collection runs on the GitHub worker."
             python -m tender_radar.jiwoncok_worker
+          fi
+
+          if [ "$external_g2b" = "true" ]; then
+            test "$g2b_ok" = "true"
           fi
 
 

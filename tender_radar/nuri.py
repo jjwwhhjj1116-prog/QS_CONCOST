@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -161,13 +162,22 @@ def fetch_category(
 def collect_recent(service_key: str, lookback_hours: int = 48) -> list[dict[str, Any]]:
     if not service_key:
         raise NuriError("DATA_GO_KR_SERVICE_KEY가 비어 있습니다.")
-    end = datetime.now()
+    end = datetime.now(ZoneInfo("Asia/Seoul"))
     start = end - timedelta(hours=max(1, lookback_hours))
     result: list[dict[str, Any]] = []
+    errors: list[str] = []
+    completed_categories = 0
     with ThreadPoolExecutor(max_workers=len(OPERATIONS), thread_name_prefix="nuri-category") as pool:
-        for rows in pool.map(
-            lambda category: fetch_category(service_key, category, start, end),
-            OPERATIONS,
-        ):
-            result.extend(rows)
+        futures = {
+            category: pool.submit(fetch_category, service_key, category, start, end)
+            for category in OPERATIONS
+        }
+        for category, future in futures.items():
+            try:
+                result.extend(future.result())
+                completed_categories += 1
+            except Exception as exc:
+                errors.append(f"{category}: {exc}")
+    if completed_categories == 0:
+        raise NuriError(" / ".join(errors) or "누리장터 API 응답을 받지 못했습니다.")
     return result

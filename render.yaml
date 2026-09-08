@@ -23,7 +23,9 @@ services:
       - key: JIWONCOK_TIMEOUT_SECONDS
         value: "16"
       - key: SCHEDULE_JOBS
-        value: "true"
+        # GitHub Actions is the single automation trigger. Running a second
+        # scheduler inside a sleeping web service caused late duplicate attempts.
+        value: "false"
       - key: COOKIE_SECURE
         value: "true"
       - key: ADMIN_USERNAME

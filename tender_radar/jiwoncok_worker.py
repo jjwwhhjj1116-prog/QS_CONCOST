@@ -24,6 +24,9 @@ def main() -> None:
         lookback_hours = 72
 
     rows, statuses = collect_recent_with_status(lookback_hours)
+    if not any(status.get("ok") for status in statuses):
+        errors = [status.get("error", "응답 없음") for status in statuses]
+        raise SystemExit("지원COK 원기관 수집 실패: " + " | ".join(errors[:5]))
     filtered = [row for row in rows if should_keep_notice(row)]
     payload = json.dumps(
         {"rows": filtered, "sources": statuses},

@@ -87,14 +87,21 @@ def collect_pps_board(source: str, board_key: str, category: str) -> list[dict[s
 
 def collect_pps() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    def collect_board(args: tuple[str, str, str]) -> list[dict[str, Any]]:
-        try:
-            return collect_pps_board(*args)
-        except Exception:
-            return []
+    completed = 0
+    errors: list[str] = []
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="pps-board") as pool:
-        for rows in pool.map(collect_board, PPS_BOARDS):
-            result.extend(rows)
+        futures = {
+            source: pool.submit(collect_pps_board, source, board_key, category)
+            for source, board_key, category in PPS_BOARDS
+        }
+        for source, future in futures.items():
+            try:
+                result.extend(future.result())
+                completed += 1
+            except Exception as exc:
+                errors.append(f"{source}: {exc}")
+    if completed == 0:
+        raise RuntimeError(" / ".join(errors) or "조달청 게시판 응답 없음")
     return result
 
 
@@ -121,19 +128,24 @@ def collect_official_news(timeout_seconds: float = 25) -> list[dict[str, Any]]:
     pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="official-news")
     futures = [pool.submit(collector) for collector in collectors]
     pending = set(futures)
+    completed = 0
+    errors: list[str] = []
     try:
         for future in as_completed(futures, timeout=max(0.01, timeout_seconds)):
             pending.discard(future)
             try:
                 result.extend(future.result())
-            except Exception:
-                continue
+                completed += 1
+            except Exception as exc:
+                errors.append(str(exc))
     except TimeoutError:
         pass
     finally:
         for future in pending:
             future.cancel()
         pool.shutdown(wait=False, cancel_futures=True)
+    if completed == 0:
+        raise RuntimeError("공식 건설뉴스 수집 실패: " + " | ".join(errors[:3]))
     deduped: list[dict[str, Any]] = []
     seen_titles: set[str] = set()
     for item in result:

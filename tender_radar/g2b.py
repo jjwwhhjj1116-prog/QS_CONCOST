@@ -4,6 +4,7 @@ import json
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -156,7 +157,7 @@ def fetch_category(
 def collect_recent(service_key: str, lookback_hours: int = 48) -> list[dict[str, Any]]:
     if not service_key:
         raise G2BError("DATA_GO_KR_SERVICE_KEY가 비어 있습니다. .env에 Decoding 키를 입력하세요.")
-    end = datetime.now()
+    end = datetime.now(ZoneInfo("Asia/Seoul"))
     start = end - timedelta(hours=lookback_hours)
     result: list[dict[str, Any]] = []
     errors: list[str] = []
