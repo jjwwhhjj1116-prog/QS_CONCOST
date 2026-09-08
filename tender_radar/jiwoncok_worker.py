@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 
 from .jiwoncok import collect_recent_with_status
 from .scoring import should_keep_notice
+from .public_snapshot import publish_snapshot
 
 
 def main() -> None:
@@ -28,6 +29,7 @@ def main() -> None:
         errors = [status.get("error", "응답 없음") for status in statuses]
         raise SystemExit("지원COK 원기관 수집 실패: " + " | ".join(errors[:5]))
     filtered = [row for row in rows if should_keep_notice(row)]
+    publish_snapshot(filtered, ["지원COK"])
     payload = json.dumps(
         {"rows": filtered, "sources": statuses},
         ensure_ascii=False,

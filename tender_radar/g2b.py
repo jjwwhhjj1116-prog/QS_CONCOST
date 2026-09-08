@@ -151,6 +151,10 @@ def fetch_category(
         if not items or fetched >= total:
             break
         page += 1
+    print(f"나라장터 {category}: 조회 {fetched}/{total}건, 적합 {len(collected)}건 "
+          f"({start:%Y-%m-%d}~{end:%Y-%m-%d})")
+    if fetched < total:
+        raise G2BError(f"{category} 페이지 제한으로 {fetched}/{total}건만 조회됨")
     return collected
 
 
@@ -162,9 +166,19 @@ def collect_recent(service_key: str, lookback_hours: int = 48) -> list[dict[str,
     result: list[dict[str, Any]] = []
     errors: list[str] = []
     completed_categories = 0
+    def collect_category(category):
+        # Day slices prevent a busy week from silently exceeding the page cap.
+        rows = []
+        cursor = start
+        while cursor < end:
+            until = min(cursor + timedelta(days=1), end)
+            rows.extend(fetch_category(service_key, category, cursor, until))
+            cursor = until
+        return list({row["source_key"]: row for row in rows}.values())
+
     with ThreadPoolExecutor(max_workers=len(OPERATIONS), thread_name_prefix="g2b-category") as pool:
         futures = {
-            category: pool.submit(fetch_category, service_key, category, start, end)
+            category: pool.submit(collect_category, category)
             for category in OPERATIONS
         }
         for category, future in futures.items():

@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 
 from . import g2b, nuri
 from .scoring import should_keep_notice
+from .public_snapshot import publish_snapshot
 
 
 def main() -> None:
@@ -22,9 +23,9 @@ def main() -> None:
     if not service_key:
         raise SystemExit("DATA_GO_KR_SERVICE_KEY is required")
     try:
-        lookback_hours = max(1, min(int(os.getenv("LOOKBACK_HOURS", "72")), 168))
+        lookback_hours = max(1, min(int(os.getenv("LOOKBACK_HOURS", "168")), 168))
     except ValueError:
-        lookback_hours = 72
+        lookback_hours = 168
 
     rows: list[dict] = []
     completed_sources: list[str] = []
@@ -42,6 +43,7 @@ def main() -> None:
         raise SystemExit(" / ".join(errors) or "공공데이터 수집 실패")
 
     filtered = [row for row in rows if should_keep_notice(row)]
+    publish_snapshot(filtered, completed_sources)
     payload = json.dumps(
         {"rows": filtered, "errors": errors, "completed_sources": completed_sources},
         ensure_ascii=False,

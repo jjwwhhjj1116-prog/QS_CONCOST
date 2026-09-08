@@ -23,6 +23,8 @@ concurrency:
 
 jobs:
   collect:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -36,6 +38,7 @@ jobs:
 
       - name: Trigger one bounded collection sweep
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           DIGEST_TRIGGER_TOKEN: ${{ secrets.DIGEST_TRIGGER_TOKEN }}
           DATA_GO_KR_SERVICE_KEY: ${{ secrets.DATA_GO_KR_SERVICE_KEY }}
           SCHEDULED_RUN: ${{ github.event_name == 'schedule' }}

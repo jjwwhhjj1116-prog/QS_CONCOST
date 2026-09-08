@@ -40,13 +40,11 @@ from .email_digest import (
 from .jiwoncok import parse_jiwoncok_email
 from .scoring import MIN_NOTICE_SCORE, should_keep_notice
 from .secrets_store import get_secret, migrate_secret, set_secret
+from .public_snapshot import PUBLIC_URL, merge_snapshot
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-DEFAULT_PUBLIC_BID_SNAPSHOT_URL = (
-    "https://raw.githubusercontent.com/jjwwhhjj1116-prog/QS_CONCOST/"
-    "codex/bootstrap-bids/bootstrap_notices.json"
-)
+DEFAULT_PUBLIC_BID_SNAPSHOT_URL = PUBLIC_URL
 
 
 def restore_public_bid_snapshot(db_path: Path) -> dict[str, int]:
@@ -68,22 +66,15 @@ def restore_public_bid_snapshot(db_path: Path) -> dict[str, int]:
     )
     with urlopen(request, timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    rows = payload.get("rows", []) if isinstance(payload, dict) else []
-    cutoff = datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=4)
-    relevant = []
-    for row in rows:
-        if not isinstance(row, dict) or not should_keep_notice(row):
-            continue
-        match = re.search(r"(20\d{2})[-./년\s]*(\d{1,2})[-./월\s]*(\d{1,2})", str(row.get("published_at", "")))
-        if not match:
-            continue
-        try:
-            if datetime(*map(int, match.groups())).date() < cutoff:
-                continue
-        except ValueError:
-            continue
-        relevant.append(row)
-    return upsert_notices(db_path, relevant)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid public snapshot")
+    snapshot = merge_snapshot(payload, [], [])
+    counts = upsert_notices(db_path, snapshot["rows"])
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    if snapshot["source_dates"].get("나라장터") == today:
+        set_setting(db_path, "last_public_bid_collect", today)
+    set_setting(db_path, "last_snapshot_restore", datetime.now(ZoneInfo("Asia/Seoul")).isoformat())
+    return counts
 
 
 def collection_job_timeout_seconds() -> float:
@@ -521,6 +512,13 @@ class Handler(BaseHTTPRequestHandler):
 
         pool: ThreadPoolExecutor | None = None
         try:
+            if is_render_runtime() and (scopes is None or {"g2b", "nuri", "jiwoncok"} & scopes):
+                try:
+                    restored = restore_public_bid_snapshot(self.settings.db_path)
+                    self._update_collection_job(job_id, message=
+                        f"최근 공개 수집본 {restored['inserted']}건 복원 · 원기관 최신 응답을 확인합니다.")
+                except Exception as exc:
+                    print(f"공개 수집본 복원 실패: {exc}")
             manual_safe_mode = is_manual_safe_collection(scopes)
             sweep_timeout = (
                 min(120.0, collection_job_timeout_seconds())

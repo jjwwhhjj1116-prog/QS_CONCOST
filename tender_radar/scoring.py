@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-SCORING_VERSION = "concost-consulting-v4"
+SCORING_VERSION = "concost-consulting-v5"
 MIN_NOTICE_SCORE = 40
 
 # CONCOST는 시공사가 아니라 공사비·원가·안전·계약 전문 컨설팅 회사다.
@@ -91,6 +91,10 @@ def _best_match(text: str, keywords: dict[str, int]) -> tuple[str, int] | None:
 def _has_keyword(text: str, keyword: str) -> bool:
     """Match Latin abbreviations as words so VE does not match 'waiver'."""
     lowered = keyword.lower()
+    if keyword in {"적산", "정산"}:
+        # Mountain/place names (향적산, 원적산, 수정산성) are not consulting.
+        text = re.sub(r"[가-힣]*(?:적산|정산)(?:성)?", lambda m:
+                      m.group() if m.group() in {"적산", "건축적산", "건설적산", "공사적산", "정산", "공사비정산", "설계변경정산", "기성정산", "준공정산"} else "", text)
     if re.search(r"[a-z0-9]", lowered):
         return bool(re.search(rf"(?<![a-z0-9]){re.escape(lowered)}(?![a-z0-9])", text))
     return lowered in text
@@ -99,6 +103,8 @@ def _has_keyword(text: str, keyword: str) -> bool:
 def score_notice(*parts: object) -> tuple[int, list[str]]:
     """Score an opportunity for CONCOST's consulting services, not construction work."""
     text = " ".join(str(part or "") for part in parts).lower()
+    if re.search(r"(?:평가위원회|심사위원회).*(?:개최\s*결과|일정\s*변경)|(?:낙찰자|우선협상대상자)\s*선정\s*결과", text):
+        return 0, ["업무제외:모집이 아닌 평가 결과·일정 안내"]
     matched: list[str] = []
     score = 0
     service_score = 0
