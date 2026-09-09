@@ -82,6 +82,20 @@ test('collector start retries attach to the existing job instead of enqueueing t
   const b=await (await worker.fetch(request('/api/trial/collect','POST',{lookback_hours:24,scope:'news'},headers),env)).json();
   assert.equal(a.run_id,b.run_id);assert.equal(b.already_running,true);assert.equal(env.COLLECTION_QUEUE.messages.length,count);
 });
+test('collection status assigns actual source groups instead of calling all records bids',async()=>{
+  const {env,db}=fixture(),token='ab'.repeat(32);
+  db.prepare('INSERT INTO sessions VALUES (?,?)').run(await tokenHash(token),Date.now()+60000);
+  const headers={Cookie:'__Host-concost='+token};
+  const started=await (await worker.fetch(request('/api/collect','POST',{lookback_hours:24},headers),env)).json();
+  const response=await worker.fetch(request('/api/collect/status/'+started.job_id,'GET',undefined,headers),env);
+  assert.equal(response.status,200);const job=await response.json();
+  assert.equal(job.sources.find(s=>s.source==='나라장터 용역').group,'입찰공고');
+  assert.equal(job.sources.find(s=>s.source==='CERIK 동향브리핑').group,'건설 뉴스');
+  assert.equal(job.sources.find(s=>s.source==='조달청 훈령').group,'법규·제도');
+  assert.ok(job.sources.some(s=>s.group==='공사비 분석'));
+  assert.ok(job.sources.some(s=>s.group==='사전 사업정보'));
+  assert.equal(job.sources.find(s=>s.source==='서울교통공사').group,'지원COK');
+});
 test('today-only email excludes old, undated and cancelled and escapes source HTML',()=>{
   const today='2026-09-08';const row={source:'source',source_key:'a',kind:'news',category:'건설 주요뉴스',title:'<script>bad</script>',published_at:'20260908',url:'javascript:bad'};
   const preview=buildPreview([row,{...row,source_key:'b',published_at:''},{...row,source_key:'c',published_at:'2026-09-01'}],Date.parse(today+'T01:00:00Z'));

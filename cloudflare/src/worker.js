@@ -1,6 +1,6 @@
 import { filterRows, jobState, kstParts, scheduleAction, todayDigest } from './logic.js';
 import { initialJobs, collectPage } from './bid-api.js';
-import { extraJobs, collectExtraPage } from './extra-sources.js';
+import { extraJobs, collectExtraPage, BOARDS, INTELLIGENCE } from './extra-sources.js';
 import { sessionValid, sameOrigin, login, settingsRoute, collectionEnv, getSecret, requestBody, emailSettings, setSetting, getSetting } from './settings.js';
 import { trialUI } from './trial-ui.js';
 import { digestPreview,queueDigest,deliverMessage } from './mail.js';
@@ -141,7 +141,8 @@ async function stats(env) {
 async function runSummary(env,id) {
   const {results}=await env.DB.prepare('SELECT * FROM collection_jobs WHERE run_id=?').bind(id).all();
   if(!results.length)return null;
-  const sources=results.map(j=>({source:j.label,state:jobState(j),ok:j.state==='succeeded',candidates:j.candidates||0,total:j.kept||0,filtered:j.filtered||0,error:j.error|| (jobState(j)==='expired'?'deadline_exceeded':'')}));
+  const group=id=>INTELLIGENCE[id]?.[0]==='pipeline'?'사전 사업정보':INTELLIGENCE[id]?.[0]==='cost'?'공사비 분석':id.startsWith('jiwon-')?'지원COK':id.startsWith('law-')||BOARDS[id]?.[3]==='법규·제도 개정'?'법규·제도':id.startsWith('news-')?'건설 뉴스':'입찰공고';
+  const sources=results.map(j=>({source:j.label,group:group(j.source_id),state:jobState(j),ok:j.state==='succeeded',candidates:j.candidates||0,total:j.kept||0,filtered:j.filtered||0,error:j.error|| (jobState(j)==='expired'?'deadline_exceeded':'')}));
   const done=sources.filter(x=>['succeeded','failed','expired','enqueue_failed'].includes(x.state)).length;
   const total=sources.reduce((n,x)=>n+x.total,0),complete=done===sources.length;
   return {job_id:id,status:complete?'complete':'running',ok:sources.some(x=>x.ok)||total>0,partial:sources.some(x=>['failed','expired','enqueue_failed'].includes(x.state)),
