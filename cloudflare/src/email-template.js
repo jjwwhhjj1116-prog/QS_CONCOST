@@ -1,7 +1,15 @@
 // Port of tender_radar/email_digest.py: preserve the incumbent email design.
 export const website='https://concost-migration-trial.jjwwhhjj1116.workers.dev';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const link=row=>esc(/^https?:\/\//i.test(row.url||'')?row.url:website+'/#notices');
+export function emailUrl(row){
+  try{
+    const url=new URL(row.url);if(!['http:','https:'].includes(url.protocol))return website+'/#notices';
+    if(url.hostname==='www.law.go.kr'&&url.pathname==='/DRF/lawService.do'&&/^\d+$/.test(url.searchParams.get('MST')||''))return 'https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq='+url.searchParams.get('MST');
+    for(const key of [...url.searchParams.keys()])if(['oc','servicekey','api_key','apikey'].includes(key.toLowerCase()))url.searchParams.delete(key);
+    return url.href;
+  }catch{return website+'/#notices';}
+}
+const link=row=>esc(emailUrl(row));
 const score=row=>Math.max(0,Math.min(100,Number(row.score)||0));
 function noticeCard(row,isNew){
   const points=score(row),color=points>=70?'#ed5b18':points>=45?'#d58a13':'#16745f';

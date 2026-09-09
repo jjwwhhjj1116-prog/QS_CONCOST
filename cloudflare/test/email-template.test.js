@@ -23,3 +23,7 @@ test('dedup uses kind and variant; malicious source content cannot execute',()=>
   const attack=buildPreview([{...bid,title:'<script>alert(1)</script>',url:'javascript:alert(1)',institution:'<img onerror=alert(1)>'}],time);
   assert.ok(!attack.html.includes('<script>'));assert.ok(!attack.html.includes('javascript:'));assert.ok(attack.html.includes('&lt;img'));
 });
+test('API credential parameters never enter HTML or plain-text email links',()=>{
+  const p=buildPreview([{...bid,kind:'news',category:'법규·제도 개정',url:'https://www.law.go.kr/DRF/lawService.do?OC=private-fixture&MST=289289&type=HTML'}],time);
+  for(const output of [p.html,p.text]){assert.ok(!output.includes('private-fixture'));assert.ok(output.includes('https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq=289289'));}
+});

@@ -1,6 +1,6 @@
 import { kstParts, todayDigest, dateOnly } from './logic.js';
 import { getSetting, getSecret, emailSettings } from './settings.js';
-import {renderEmail} from './email-template.js';
+import {renderEmail,emailUrl} from './email-template.js';
 export const digestItemKey=row=>JSON.stringify([row.kind,row.source,row.source_key,row.variant||'']);
 export function buildPreview(rows,time=Date.now(),sentKeys=[]) {
   const date=kstParts(time).date;
@@ -17,31 +17,44 @@ export function buildPreview(rows,time=Date.now(),sentKeys=[]) {
   const counts={new_notices:newNotices.length,old_notices:oldNotices.length,new_news:newNews.length,construction_news:news.length,law_news:laws.length};
   const subject=`[CONCOST] ${date} 건설 기회 브리핑 · 신규 공고 ${newNotices.length}건`;
   const html=renderEmail({date,newNotices,oldNotices,news,laws});
-  const text=[subject,...[['신규 입찰공고',newNotices],['기존 알림 프로젝트',oldNotices],['건설 주요뉴스',news],['법규·제도 개정',laws]].flatMap(([label,list])=>['',label,...list.map(r=>`${r.title} (${r.source}) ${/^https?:\/\//i.test(r.url||'')?r.url:''}`)])].join('\n');
+  const text=[subject,...[['신규 입찰공고',newNotices],['기존 알림 프로젝트',oldNotices],['건설 주요뉴스',news],['법규·제도 개정',laws]].flatMap(([label,list])=>['',label,...list.map(r=>`${r.title} (${r.source}) ${emailUrl(r)}`)])].join('\n');
   return {subject,html,text,counts,items,old_notices:oldNotices,date};
 }
-export async function digestPreview(env) {
+// One-off authorization from the user; expires without changing the daily schedule.
+const recoveryDay='2026-09-09',recoverySource='2026-09-08';
+export async function digestPreview(env,recovery=false) {
+  if(recovery&&kstParts().date!==recoveryDay)throw new Error('recovery_authorization_expired');
   const {results}=await env.DB.prepare("SELECT kind,variant,payload FROM items WHERE kind IN ('notice','news') AND published_at<>'' ORDER BY published_at DESC LIMIT 2000").all();
   // Legacy snapshots without item keys are unknown history, never guessed from titles.
   const {results:history}=await env.DB.prepare("SELECT d.payload FROM delivery_days d WHERE EXISTS (SELECT 1 FROM deliveries r WHERE r.day=d.day AND r.status='sent' AND r.provider_id<>'') ORDER BY d.day DESC LIMIT 90").all();
   const keys=history.flatMap(d=>{const value=JSON.parse(d.payload).item_keys;return Array.isArray(value)?value:[];});
-  return buildPreview(results.map(x=>({...JSON.parse(x.payload),kind:x.kind,variant:x.variant})),Date.now(),keys);
+  let rows=results.map(x=>({...JSON.parse(x.payload),kind:x.kind,variant:x.variant}));
+  if(!recovery)return buildPreview(rows,Date.now(),keys);
+  const sent=new Set(keys);
+  rows=rows.filter(r=>dateOnly(r.published_at)===recoverySource&&!sent.has(digestItemKey(r))&&(!dateOnly(r.deadline_at)||dateOnly(r.deadline_at)>=recoveryDay));
+  const preview=buildPreview(rows,Date.parse(recoverySource+'T10:00:00+09:00'));
+  preview.subject=`[CONCOST] 9월 8일 자료 보완 발송 · 공고 ${preview.counts.new_notices}건 · 뉴스/법규 ${preview.counts.new_news}건`;
+  preview.html=preview.html.replaceAll('오늘','9월 8일').replace('OPPORTUNITY INTELLIGENCE','9월 9일 보완 발송 · 9월 8일 등록 자료');
+  preview.text=preview.subject+'\n어제 미발송 자료를 오늘 한 번 보완 발송합니다.\n'+preview.text;
+  return preview;
 }
-export async function queueDigest(env) {
+export async function queueDigest(env,recovery=false) {
   if(env.MAIL_MODE!=='live')throw new Error('trial_mail_disabled');
   const now=Date.now(),k=kstParts(now);
-  if(k.weekday===0||k.weekday===6||k.hour!==10||k.minute!==0)throw new Error('outside_mail_window');
+  if(recovery?k.date!==recoveryDay:k.weekday===0||k.weekday===6||k.hour!==10||k.minute!==0)throw new Error('outside_mail_window');
   if(await getSetting(env,'digest_enabled','false')!=='true')throw new Error('digest_disabled');
   if(!await getSecret(env,'RESEND_API_KEY'))throw new Error('missing_resend_key');
   const settings=await emailSettings(env);
   if(!settings.from_email||!settings.recipients.length)throw new Error('missing_mail_addresses');
   const existing=await env.DB.prepare('SELECT state,payload FROM delivery_days WHERE day=?').bind(k.date).first();
+  if(recovery&&existing&&JSON.parse(existing.payload).recovery_source!==recoverySource)throw new Error('existing_daily_digest_conflict');
   if(existing?.state==='sent')return {sent:false,already_sent:true,recipient_count:JSON.parse(existing.payload).recipients.length};
-  const preview=existing?null:await digestPreview(env);
+  const preview=existing?null:await digestPreview(env,recovery);
   if(!existing&&!preview.items.length)throw new Error('no_verified_today_items');
   // Immutable day snapshot. A second trigger cannot change contents/recipients.
   const snapshot=existing?JSON.parse(existing.payload):{from:settings.from_email,subject:preview.subject,html:preview.html,text:preview.text,
-    recipients:settings.recipients.map(r=>r.email),counts:preview.counts,item_keys:preview.items.map(digestItemKey)};
+    recipients:settings.recipients.map(r=>r.email),counts:preview.counts,item_keys:preview.items.map(digestItemKey),
+    ...(recovery?{recovery_source:recoverySource,recovery_until:now+300000}:{})};
   const insert=await env.DB.prepare("INSERT OR IGNORE INTO delivery_days(day,state,created_at,payload) VALUES (?,'preparing',?,?)")
     .bind(k.date,now,JSON.stringify(snapshot)).run();
   const saved=await env.DB.prepare('SELECT state,payload FROM delivery_days WHERE day=?').bind(k.date).first();
@@ -58,16 +71,17 @@ export async function deliverMessage(message,env,fetcher=fetch,time=Date.now()) 
   if(env.MAIL_MODE!=='live'){message.ack();return;}
   const current=await env.DB.prepare('SELECT status FROM deliveries WHERE day=? AND email=?').bind(day,email).first();
   if(!current||['sent','failed','expired'].includes(current.status)){message.ack();return;}
+  const saved=await env.DB.prepare('SELECT payload FROM delivery_days WHERE day=?').bind(day).first();
+  if(!saved){message.ack();return;}
+  const snapshot=JSON.parse(saved.payload);
+  const recovery=day===recoveryDay&&snapshot.recovery_source===recoverySource&&time<snapshot.recovery_until;
   // No afternoon catch-up or previous-day redelivery. Queue latency is not a clock guarantee.
-  if(day!==k.date||k.hour!==10||k.minute>4||[0,6].includes(k.weekday)) {
+  if(day!==k.date||(!recovery&&(k.hour!==10||k.minute>4||[0,6].includes(k.weekday)))) {
     await env.DB.prepare("UPDATE deliveries SET status='expired',lease_until=0 WHERE day=? AND email=? AND status<>'sent'").bind(day,email).run();message.ack();return;
   }
   const claim=await env.DB.prepare("UPDATE deliveries SET status='sending',lease_until=? WHERE day=? AND email=? AND status IN ('pending','retrying','sending') AND lease_until<?")
     .bind(time+45000,day,email,time).run();
   if(!claim.meta.changes){message.retry({delaySeconds:45});return;}
-  const saved=await env.DB.prepare('SELECT payload FROM delivery_days WHERE day=?').bind(day).first();
-  if(!saved){message.ack();return;}
-  const snapshot=JSON.parse(saved.payload);
   try {
     if(!snapshot.recipients.includes(email))throw new Error('invalid_digest_recipient');
     const key=await getSecret(env,'RESEND_API_KEY');if(!key)throw new Error('missing_resend_key');
@@ -79,7 +93,7 @@ export async function deliverMessage(message,env,fetcher=fetch,time=Date.now()) 
     await env.DB.prepare("UPDATE deliveries SET status='sent',provider_id=?,lease_until=0 WHERE day=? AND email=?").bind(receipt.id,day,email).run();
     await env.DB.prepare("UPDATE delivery_days SET state='sent',error='' WHERE day=? AND NOT EXISTS (SELECT 1 FROM deliveries WHERE day=? AND status<>'sent')").bind(day,day).run();message.ack();
   } catch(error) {
-    const retry=message.attempts<3&&kstParts(Date.now()).minute<4;
+    const retry=message.attempts<3&&(recovery?Date.now()<snapshot.recovery_until:kstParts(Date.now()).minute<4);
     await env.DB.prepare('UPDATE deliveries SET status=?,lease_until=0 WHERE day=? AND email=?').bind(retry?'retrying':'failed',day,email).run();
     await env.DB.prepare("UPDATE delivery_days SET state='partial',error=? WHERE day=?").bind(/^resend_http_\d+$/.test(error.message)?error.message:'mail_delivery_unconfirmed',day).run();
     if(retry)message.retry({delaySeconds:10});else message.ack();

@@ -162,3 +162,20 @@ test('partial-day retry reuses immutable snapshot even if fresh items are now ab
   const result=await queueDigest(env);assert.equal(result.queued,true);assert.equal(env.MAIL_QUEUE.messages.length,1);assert.equal(env.MAIL_QUEUE.messages[0].body.email,'b@example.org');
   assert.equal(JSON.parse(db.prepare('SELECT payload FROM delivery_days').get().payload).html,'original html');
 });
+test('authorized Sept 9 recovery sends only Sept 8 items once; normal time gate stays intact',async t=>{
+  const {env,db}=fixture();env.MAIL_MODE='live';env.RESEND_API_KEY='re_fixture';env.DIGEST_FROM_EMAIL='news@example.org';env.DIGEST_RECIPIENTS='a@example.org';
+  let time=Date.parse('2026-09-09T14:20:00+09:00');t.mock.method(Date,'now',()=>time);
+  for(const [key,date] of [['yesterday','2026-09-08'],['today','2026-09-09'],['older','2026-09-07']]){
+    const row={kind:'notice',source:'test',source_key:key,title:'공사비 검증 '+key,score:90,published_at:date,deadline_at:'2026-09-30'};
+    db.prepare('INSERT INTO items VALUES (?,?,?,?,?,?,?)').run('notice','test',key,'',date,JSON.stringify(row),date);
+  }
+  env.MAIL_QUEUE={messages:[],async sendBatch(ms){this.messages.push(...ms);}};
+  const p=await digestPreview(env,true);assert.equal(p.items.length,1);assert.equal(p.items[0].source_key,'yesterday');assert.ok(p.subject.includes('보완 발송'));
+  await assert.rejects(queueDigest(env),/outside_mail_window/);
+  await queueDigest(env,true);let calls=0;
+  const provider=async(url,opts)=>{calls++;assert.ok(JSON.parse(opts.body).subject.includes('9월 8일'));return Response.json({id:'recovery-receipt'});};
+  const message={body:env.MAIL_QUEUE.messages[0].body,attempts:1,ack(){},retry(){throw Error('unexpected retry');}};
+  await deliverMessage(message,env,provider,time);await deliverMessage(message,env,provider,time);assert.equal(calls,1);
+  assert.equal((await queueDigest(env,true)).already_sent,true);
+  time=Date.parse('2026-09-10T14:20:00+09:00');await assert.rejects(queueDigest(env,true),/outside_mail_window/);await assert.rejects(digestPreview(env,true),/recovery_authorization_expired/);
+});

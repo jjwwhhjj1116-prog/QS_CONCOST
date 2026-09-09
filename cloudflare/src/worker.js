@@ -178,6 +178,14 @@ export default {
         if(request.method!=='GET'&&!sameOrigin(request))return json({error:'동일 사이트에서 요청하세요.'},403);
         const settings=await settingsRoute(request,env);if(settings)return settings;
         if(request.method==='GET'&&url.pathname==='/api/admin/digest-preview')return json(await digestPreview(env));
+        if(url.pathname==='/api/admin/recovery-digest') {
+          if(request.method==='POST')return json(await queueDigest(env,true),202);
+          if(request.method==='GET') {
+            const preview=await digestPreview(env,true),settings=await emailSettings(env);
+            const action=`<div style="padding:24px;text-align:center;background:#fff5df"><p>9월 8일 등록 자료 보완 발송 · 주소록 ${settings.recipients.length}명<br>평소 예약은 변경하지 않습니다. 오늘 한 번만 발송합니다.</p><form method="post" action="/api/admin/recovery-digest"><button ${preview.items.length?'':'disabled'} style="padding:16px;background:#ed5b18;color:white;border:0;border-radius:8px;font-weight:bold">9월 8일 자료를 주소록에 한 번 발송</button></form></div>`;
+            return new Response(preview.html.replace(/<body[^>]*>/,body=>body+action),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
+          }
+        }
         if(request.method==='POST'&&url.pathname==='/api/admin/test-email')return json({error:'시험 수신자를 따로 지정하는 기능은 아직 준비 중입니다. 예약발송 결과를 확인하세요.'},409);
         if(request.method==='POST'&&url.pathname==='/api/admin/send-digest') {
           if(env.MAIL_MODE!=='live')return json({error:'시험판 실제 메일 발송은 비활성입니다. HTML 미리보기를 이용하세요.'},409);
