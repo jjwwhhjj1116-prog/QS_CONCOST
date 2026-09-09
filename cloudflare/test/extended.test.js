@@ -7,7 +7,7 @@ import worker from '../src/worker.js';
 import {parseBoard,normalizeIntelligence,collectExtraPage,extraJobs,requestText} from '../src/extra-sources.js';
 import {dateOnly,kstParts} from '../src/logic.js';
 import {getSecret,saveSecret,setSetting,tokenHash,emailSettings} from '../src/settings.js';
-import {buildPreview,queueDigest,deliverMessage} from '../src/mail.js';
+import {buildPreview,queueDigest,deliverMessage,digestPreview,digestItemKey} from '../src/mail.js';
 import {xmlResponse} from '../src/other-bids.js';
 
 crypto.subtle.timingSafeEqual=(a,b)=>timingSafeEqual(new Uint8Array(a),new Uint8Array(b));
@@ -101,6 +101,18 @@ test('today-only email excludes old, undated and cancelled and escapes source HT
   const preview=buildPreview([row,{...row,source_key:'b',published_at:''},{...row,source_key:'c',published_at:'2026-09-01'}],Date.parse(today+'T01:00:00Z'));
   assert.equal(preview.items.length,1);assert.ok(!preview.html.includes('<script>'));assert.ok(!preview.html.includes('javascript:'));
 });
+test('preview reads provider-confirmed item history, not failed or legacy snapshots',async t=>{
+  const {env,db}=fixture();const time=Date.parse('2026-09-09T10:00:01+09:00');t.mock.method(Date,'now',()=>time);
+  const row={kind:'notice',source:'test',source_key:'history',title:'공사비 검증',score:90,published_at:'2026-09-09',deadline_at:'2026-09-30'};
+  db.prepare('INSERT INTO items VALUES (?,?,?,?,?,?,?)').run('notice','test','history','','2026-09-09',JSON.stringify(row),'2026-09-09');
+  db.prepare("INSERT INTO delivery_days VALUES ('2026-09-08','partial',1,?,'')").run(JSON.stringify({item_keys:[digestItemKey(row)]}));
+  db.prepare("INSERT INTO deliveries(day,email,status) VALUES ('2026-09-08','fixture@example.org','failed')").run();
+  assert.equal((await digestPreview(env)).counts.new_notices,1);
+  db.prepare("UPDATE deliveries SET status='sent',provider_id='fixture-receipt'").run();
+  const sent=await digestPreview(env);assert.equal(sent.counts.new_notices,0);assert.equal(sent.counts.old_notices,1);
+  db.prepare("UPDATE delivery_days SET payload='{}'").run();
+  assert.equal((await digestPreview(env)).counts.new_notices,1);
+});
 test('dry-run never enqueues mail, and day/recipient uniqueness is durable',async()=>{
   const {env,db}=fixture();await assert.rejects(queueDigest(env),/trial_mail_disabled/);
   db.prepare("INSERT INTO delivery_days VALUES ('2026-09-08','sent',1,'{}','')").run();
@@ -139,4 +151,14 @@ test('no old content mail; failed 10AM preparation is recorded, not silently suc
   const status=await (await worker.fetch(request('/api/automation/status'),env)).json();assert.equal(status.last_scheduler_error,'no_verified_today_items');
   t.mock.method(Date,'now',()=>time+3600000);await worker.scheduled({scheduledTime:time},env);
   assert.equal(env.COLLECTION_QUEUE.messages.length,0);
+});
+test('partial-day retry reuses immutable snapshot even if fresh items are now absent',async t=>{
+  const {env,db}=fixture();env.MAIL_MODE='live';env.RESEND_API_KEY='re_fixture';env.DIGEST_FROM_EMAIL='news@example.org';env.DIGEST_RECIPIENTS='a@example.org';
+  t.mock.method(Date,'now',()=>Date.parse('2026-09-09T10:00:20+09:00'));
+  const snapshot={from:'news@example.org',subject:'original',html:'original html',text:'original',recipients:['a@example.org','b@example.org'],counts:{new_notices:1},item_keys:[]};
+  db.prepare("INSERT INTO delivery_days VALUES ('2026-09-09','partial',1,?,'')").run(JSON.stringify(snapshot));
+  db.prepare("INSERT INTO deliveries(day,email,status,provider_id) VALUES ('2026-09-09','a@example.org','sent','receipt')").run();
+  env.MAIL_QUEUE={messages:[],async sendBatch(ms){this.messages.push(...ms);}};
+  const result=await queueDigest(env);assert.equal(result.queued,true);assert.equal(env.MAIL_QUEUE.messages.length,1);assert.equal(env.MAIL_QUEUE.messages[0].body.email,'b@example.org');
+  assert.equal(JSON.parse(db.prepare('SELECT payload FROM delivery_days').get().payload).html,'original html');
 });

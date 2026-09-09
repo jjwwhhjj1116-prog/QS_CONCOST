@@ -1,21 +1,31 @@
-import { kstParts, todayDigest } from './logic.js';
+import { kstParts, todayDigest, dateOnly } from './logic.js';
 import { getSetting, getSecret, emailSettings } from './settings.js';
-const escape=value=>String(value||'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
-export function buildPreview(rows,time=Date.now()) {
+import {renderEmail} from './email-template.js';
+export const digestItemKey=row=>JSON.stringify([row.kind,row.source,row.source_key,row.variant||'']);
+export function buildPreview(rows,time=Date.now(),sentKeys=[]) {
   const date=kstParts(time).date;
-  const selected=todayDigest(rows,time).filter(row=>row.kind==='news'||row.score>=40);
-  const seen=new Set(),items=selected.filter(row=>{const key=`${row.source}:${row.source_key}`;if(seen.has(key))return false;seen.add(key);return true;}).slice(0,200);
-  const counts={new_notices:items.filter(x=>x.kind!=='news').length,new_news:items.filter(x=>x.kind==='news').length};
-  const subject=`[CONCOST] ${date} 건설 기회 브리핑`;
-  const groups=['입찰공고','건설 주요뉴스','법규·제도 개정'];
-  const group=row=>row.kind==='news'?row.category:'입찰공고';
-  const html=`<!doctype html><meta charset="utf-8"><h1>${escape(subject)}</h1><p>원문 등록일이 ${date}로 확인된 자료입니다. 날짜 미확인 자료와 과거 자료는 제외했습니다.</p>`+
-    groups.map(name=>`<h2>${name}</h2><ul>`+items.filter(x=>group(x)===name).map(x=>`<li>${/^https?:\/\//i.test(x.url||'')?`<a href="${escape(x.url)}">${escape(x.title)}</a>`:escape(x.title)} — ${escape(x.source)}</li>`).join('')+'</ul>').join('');
-  return {subject,html,text:items.map(x=>`${x.title} (${x.source}) ${x.url||''}`).join('\n'),counts,items,date};
+  const sent=new Set(sentKeys),seen=new Set();
+  const unique=rows.filter(row=>{const key=digestItemKey(row);if(seen.has(key))return false;seen.add(key);return true;});
+  const selected=todayDigest(unique,time).filter(row=>!sent.has(digestItemKey(row))&&(row.kind==='news'||row.kind==='notice'&&row.score>=40));
+  const rank=(a,b)=>(Number(b.score)||0)-(Number(a.score)||0)||String(b.published_at).localeCompare(String(a.published_at));
+  const newNotices=selected.filter(r=>r.kind==='notice').sort(rank).slice(0,30);
+  const newNews=selected.filter(r=>r.kind==='news').sort(rank).slice(0,20);
+  const oldNotices=unique.filter(r=>r.kind==='notice'&&r.score>=40&&sent.has(digestItemKey(r))&&dateOnly(r.published_at)&&dateOnly(r.published_at)<=date&&
+    !['취소','마감'].includes(r.notice_type)&&(!dateOnly(r.deadline_at)||dateOnly(r.deadline_at)>=date)).sort(rank).slice(0,12);
+  const news=newNews.filter(r=>r.category!=='법규·제도 개정'),laws=newNews.filter(r=>r.category==='법규·제도 개정');
+  const items=[...newNotices,...newNews];
+  const counts={new_notices:newNotices.length,old_notices:oldNotices.length,new_news:newNews.length,construction_news:news.length,law_news:laws.length};
+  const subject=`[CONCOST] ${date} 건설 기회 브리핑 · 신규 공고 ${newNotices.length}건`;
+  const html=renderEmail({date,newNotices,oldNotices,news,laws});
+  const text=[subject,...[['신규 입찰공고',newNotices],['기존 알림 프로젝트',oldNotices],['건설 주요뉴스',news],['법규·제도 개정',laws]].flatMap(([label,list])=>['',label,...list.map(r=>`${r.title} (${r.source}) ${/^https?:\/\//i.test(r.url||'')?r.url:''}`)])].join('\n');
+  return {subject,html,text,counts,items,old_notices:oldNotices,date};
 }
 export async function digestPreview(env) {
-  const {results}=await env.DB.prepare("SELECT kind,payload FROM items WHERE kind IN ('notice','news') AND published_at<>'' ORDER BY published_at DESC LIMIT 2000").all();
-  return buildPreview(results.map(x=>({...JSON.parse(x.payload),kind:x.kind})));
+  const {results}=await env.DB.prepare("SELECT kind,variant,payload FROM items WHERE kind IN ('notice','news') AND published_at<>'' ORDER BY published_at DESC LIMIT 2000").all();
+  // Legacy snapshots without item keys are unknown history, never guessed from titles.
+  const {results:history}=await env.DB.prepare("SELECT d.payload FROM delivery_days d WHERE EXISTS (SELECT 1 FROM deliveries r WHERE r.day=d.day AND r.status='sent' AND r.provider_id<>'') ORDER BY d.day DESC LIMIT 90").all();
+  const keys=history.flatMap(d=>{const value=JSON.parse(d.payload).item_keys;return Array.isArray(value)?value:[];});
+  return buildPreview(results.map(x=>({...JSON.parse(x.payload),kind:x.kind,variant:x.variant})),Date.now(),keys);
 }
 export async function queueDigest(env) {
   if(env.MAIL_MODE!=='live')throw new Error('trial_mail_disabled');
@@ -23,12 +33,15 @@ export async function queueDigest(env) {
   if(k.weekday===0||k.weekday===6||k.hour!==10||k.minute!==0)throw new Error('outside_mail_window');
   if(await getSetting(env,'digest_enabled','false')!=='true')throw new Error('digest_disabled');
   if(!await getSecret(env,'RESEND_API_KEY'))throw new Error('missing_resend_key');
-  const settings=await emailSettings(env),preview=await digestPreview(env);
+  const settings=await emailSettings(env);
   if(!settings.from_email||!settings.recipients.length)throw new Error('missing_mail_addresses');
-  if(!preview.items.length)throw new Error('no_verified_today_items');
+  const existing=await env.DB.prepare('SELECT state,payload FROM delivery_days WHERE day=?').bind(k.date).first();
+  if(existing?.state==='sent')return {sent:false,already_sent:true,recipient_count:JSON.parse(existing.payload).recipients.length};
+  const preview=existing?null:await digestPreview(env);
+  if(!existing&&!preview.items.length)throw new Error('no_verified_today_items');
   // Immutable day snapshot. A second trigger cannot change contents/recipients.
-  const snapshot={from:settings.from_email,subject:preview.subject,html:preview.html,text:preview.text,
-    recipients:settings.recipients.map(r=>r.email),counts:preview.counts};
+  const snapshot=existing?JSON.parse(existing.payload):{from:settings.from_email,subject:preview.subject,html:preview.html,text:preview.text,
+    recipients:settings.recipients.map(r=>r.email),counts:preview.counts,item_keys:preview.items.map(digestItemKey)};
   const insert=await env.DB.prepare("INSERT OR IGNORE INTO delivery_days(day,state,created_at,payload) VALUES (?,'preparing',?,?)")
     .bind(k.date,now,JSON.stringify(snapshot)).run();
   const saved=await env.DB.prepare('SELECT state,payload FROM delivery_days WHERE day=?').bind(k.date).first();
