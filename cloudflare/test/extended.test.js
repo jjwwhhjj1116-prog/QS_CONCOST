@@ -109,7 +109,8 @@ test('preview reads provider-confirmed item history, not failed or legacy snapsh
   db.prepare("INSERT INTO deliveries(day,email,status) VALUES ('2026-09-08','fixture@example.org','failed')").run();
   assert.equal((await digestPreview(env)).counts.new_notices,1);
   db.prepare("UPDATE deliveries SET status='sent',provider_id='fixture-receipt'").run();
-  const sent=await digestPreview(env);assert.equal(sent.counts.new_notices,0);assert.equal(sent.counts.old_notices,1);
+  const sent=await digestPreview(env,false,true);assert.equal(sent.counts.new_notices,0);assert.equal(sent.counts.old_notices,1);
+  const overview=await digestPreview(env);assert.equal(overview.counts.new_notices,1);assert.equal(overview.counts.old_notices,0);
   db.prepare("UPDATE delivery_days SET payload='{}'").run();
   assert.equal((await digestPreview(env)).counts.new_notices,1);
 });
@@ -143,14 +144,50 @@ test('10AM cron sends once through separate mail queue, without administrator se
   const status=await (await worker.fetch(request('/api/automation/status'),env)).json();
   assert.equal(status.counts[0].provider_accepted,2);assert.ok(!JSON.stringify(status).includes('a@example.org'));
 });
-test('no old content mail; failed 10AM preparation is recorded, not silently successful',async(t)=>{
-  const {env}=fixture();env.MAIL_MODE='live';env.SCHEDULE_ENABLED='true';env.RESEND_API_KEY='re_fixture';
+test('empty collection sends an honest status notice once, never fabricated old content',async(t)=>{
+  const {env,db}=fixture();env.MAIL_MODE='live';env.SCHEDULE_ENABLED='true';env.RESEND_API_KEY='re_fixture';
   env.DIGEST_FROM_EMAIL='news@example.org';env.DIGEST_RECIPIENTS='a@example.org';
+  env.MAIL_QUEUE={messages:[],async sendBatch(ms){this.messages.push(...ms);}};
   const time=Date.parse('2026-09-09T10:00:01+09:00');t.mock.method(Date,'now',()=>time);
-  await assert.rejects(worker.scheduled({scheduledTime:time},env),/no_verified_today_items/);
-  const status=await (await worker.fetch(request('/api/automation/status'),env)).json();assert.equal(status.last_scheduler_error,'no_verified_today_items');
+  await worker.scheduled({scheduledTime:time},env);
+  const saved=JSON.parse(db.prepare('SELECT payload FROM delivery_days').get().payload);
+  assert.match(saved.subject,/수집 점검 안내/);assert.deepEqual(saved.item_keys,[]);
+  assert.match(saved.html,/실제 공고가 없다는 뜻은 아니며/);assert.equal(env.MAIL_QUEUE.messages.length,1);
+  const status=await (await worker.fetch(request('/api/automation/status'),env)).json();assert.equal(status.last_scheduler_error,'');
+  assert.equal(status.attempts[0].state,'queued');
   t.mock.method(Date,'now',()=>time+3600000);await worker.scheduled({scheduledTime:time},env);
   assert.equal(env.COLLECTION_QUEUE.messages.length,0);
+  assert.equal(env.MAIL_QUEUE.messages.length,1);
+});
+
+test('10:01 retry repairs queue publication failure with one immutable snapshot and no duplicate mail',async t=>{
+  const {env,db}=fixture();Object.assign(env,{MAIL_MODE:'live',SCHEDULE_ENABLED:'true',RESEND_API_KEY:'re_fixture',DIGEST_FROM_EMAIL:'news@example.org',DIGEST_RECIPIENTS:'a@example.org'});
+  let now=Date.parse('2026-09-15T10:00:02+09:00');t.mock.method(Date,'now',()=>now);
+  env.MAIL_QUEUE={messages:[],async sendBatch(){throw Error('queue_unavailable');}};
+  await assert.rejects(worker.scheduled({scheduledTime:now},env),/queue_unavailable/);
+  const original=db.prepare('SELECT payload FROM delivery_days').get().payload;
+  now+=60000;env.MAIL_QUEUE.sendBatch=async function(ms){this.messages.push(...ms);};
+  await worker.scheduled({scheduledTime:now},env);
+  assert.equal(db.prepare('SELECT payload FROM delivery_days').get().payload,original);
+  let calls=0;const provider=async()=>{calls++;return Response.json({id:'retry-receipt'});};
+  const msg={body:env.MAIL_QUEUE.messages[0].body,attempts:1,ack(){},retry(){throw Error('unexpected_retry');}};
+  await deliverMessage(msg,env,provider,now);await deliverMessage(msg,env,provider,now);
+  now+=60000;await worker.scheduled({scheduledTime:now},env);
+  assert.equal(calls,1);assert.equal(env.MAIL_QUEUE.messages.length,1);
+  const status=await (await worker.fetch(request('/api/automation/status'),env)).json();
+  assert.deepEqual(status.attempts.map(a=>a.state),['already_sent','queued','failed']);
+  assert.equal(status.attempts[2].error,'queue_unavailable');
+  assert.ok(!JSON.stringify(status.attempts).includes('a@example.org'));
+  now=Date.parse('2026-09-15T10:05:00+09:00');await assert.rejects(queueDigest(env),/outside_mail_window/);
+});
+
+test('a delayed cron from yesterday cannot send today',async t=>{
+  const {env,db}=fixture();env.SCHEDULE_ENABLED='true';env.MAIL_MODE='live';
+  t.mock.method(Date,'now',()=>Date.parse('2026-09-15T10:00:00+09:00'));
+  await worker.scheduled({scheduledTime:Date.parse('2026-09-14T10:00:00+09:00')},env);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM delivery_days').get().n,0);
+  const status=await (await worker.fetch(request('/api/automation/status'),env)).json();
+  assert.equal(status.attempts[0].error,'outside_schedule_window');
 });
 test('partial-day retry reuses immutable snapshot even if fresh items are now absent',async t=>{
   const {env,db}=fixture();env.MAIL_MODE='live';env.RESEND_API_KEY='re_fixture';env.DIGEST_FROM_EMAIL='news@example.org';env.DIGEST_RECIPIENTS='a@example.org';

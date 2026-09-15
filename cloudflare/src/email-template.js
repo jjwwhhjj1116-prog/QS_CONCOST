@@ -27,10 +27,10 @@ function newsCard(row){return `<tr><td style="padding:0 0 10px"><a href="${link(
   ${row.summary?`<span style="display:block;font-size:12px;color:#566a75;line-height:1.5;margin-top:7px">${esc(String(row.summary).slice(0,180))}</span>`:''}</a></td></tr>`;}
 function section(title,subtitle,cards,empty){return `<tr><td class="section-pad" style="padding:26px 24px 8px"><h2 style="font-size:20px;color:#102d3f;margin:0;font-weight:900">${title}</h2><div style="font-size:12px;color:#61727b;margin-top:5px;line-height:1.6">${subtitle}</div></td></tr>
   <tr><td class="section-pad" style="padding:0 24px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${cards.join('')||`<tr><td style="padding:16px;background:#f6f8f9;color:#566a75;font-size:13px;line-height:1.6;border-radius:8px">${empty}</td></tr>`}</table></td></tr>`;}
-export function renderEmail({date,newNotices,oldNotices,news,laws}){
+export function renderEmail({date,newNotices,oldNotices,news,laws,includeSentToday=false,collectionNote=''}){
   const total=newNotices.length+news.length+laws.length;
   const sections=[
-    section('신규 입찰공고','오늘 등록되고 아직 발송 이력이 없는 공고 · 적합도 높은 순',newNotices.map(r=>noticeCard(r,true)),'오늘 날짜로 확인된 신규 발송 대상 공고가 없습니다.'),
+    section('신규 입찰공고',includeSentToday?'오늘 등록된 공고 · 발송 완료 자료 포함 · 적합도 높은 순':'오늘 등록되고 아직 발송 이력이 없는 공고 · 적합도 높은 순',newNotices.map(r=>noticeCard(r,true)),'오늘 날짜로 확인된 신규 발송 대상 공고가 없습니다.'),
     section('기존 알림 프로젝트','발송 이력이 확인된 공고 중 계속 확인할 항목 · 신규 건수와 별도',oldNotices.map(r=>noticeCard(r,false)),'발송 이력이 확인된 진행 중 공고가 없습니다.'),
     section('건설 주요뉴스','공사비·안전진단·재건축·재개발 관련 당일 뉴스',news.map(newsCard),'오늘 날짜로 확인된 신규 뉴스가 없습니다.'),
     section('법규·제도 개정','조달·건설 관련 당일 법령 및 제도 변화',laws.map(newsCard),'오늘 날짜로 확인된 신규 법규·제도 자료가 없습니다.'),
@@ -40,7 +40,8 @@ export function renderEmail({date,newNotices,oldNotices,news,laws}){
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#fff;border-radius:18px;overflow:hidden">
   <tr><td style="padding:26px 28px;background:#20262b;border-top:5px solid #ed5b18"><img src="${website}/concost-logo.png" width="150" alt="CONCOST" style="display:block;background:#fff;border-radius:8px;padding:7px"><div style="color:#ff7a31;font-size:11px;letter-spacing:1.5px;font-weight:800;margin-top:20px">OPPORTUNITY INTELLIGENCE</div><h1 class="brief-title" style="color:#fff;font-size:27px;font-weight:900;line-height:1.3;margin:5px 0 0">오늘의 건설 기회 브리핑</h1><div style="color:#cbd3d7;font-size:13px;margin-top:8px">${esc(date)} · 입찰공고, 건설뉴스, 법규·제도 개정</div></td></tr>
   <tr><td class="section-pad" style="padding:20px 24px 0"><table role="presentation" width="100%" style="background:#fff5ef;border-radius:12px"><tr>${[[newNotices.length,'신규 공고'],[news.length,'건설뉴스'],[laws.length,'법규·제도']].map(([n,label])=>`<td width="33%" style="padding:16px 4px;text-align:center"><strong style="font-size:26px;color:#b84200">${n}</strong><br><span style="font-size:11px;color:#566a75">${label}</span></td>`).join('')}</tr></table></td></tr>
-  ${!total?'<tr><td class="section-pad" style="padding:18px 24px 0"><p style="background:#fff5df;padding:14px;color:#70501c;font-size:13px;line-height:1.7;margin:0">당일 신규 발송 대상으로 확인된 자료가 없습니다. 실제 공고가 없다는 뜻은 아니며, 수집 오류나 원문 날짜 미확인 여부를 점검해야 합니다. 이 미리보기만으로 메일이 발송되지는 않습니다.</p></td></tr>':''}
+  ${collectionNote?`<tr><td class="section-pad" style="padding:18px 24px 0;font-size:13px;line-height:1.7;color:#70501c">${esc(collectionNote)}</td></tr>`:''}
+  ${!total?'<tr><td class="section-pad" style="padding:18px 24px 0"><p style="background:#fff5df;padding:14px;color:#70501c;font-size:13px;line-height:1.7;margin:0">당일 신규 발송 대상으로 확인된 자료가 없습니다. 실제 공고가 없다는 뜻은 아니며, 수집 오류나 원문 날짜 미확인 여부를 점검해야 합니다.</p></td></tr>':''}
   ${sections}<tr><td align="center" style="padding:30px 24px"><a href="${website}/#notices" style="display:inline-block;background:#ed5b18;color:#fff;text-decoration:none;font-weight:800;padding:14px 26px;border-radius:9px">QS_ConCost 바로가기 →</a><div style="font-size:11px;color:#61727b;line-height:1.6;margin-top:18px">각 제목을 누르면 원문 공고 또는 CONCOST 사이트로 이동합니다.<br>신규 자료와 기존 알림은 구분되며, 과거 뉴스는 다시 포함하지 않습니다.</div></td></tr>
   <tr><td style="background:#102d3f;color:#c4d0d6;padding:18px 24px;font-size:10px;text-align:center">© CONCOST · Construction Cost &amp; Opportunity Intelligence</td></tr></table></td></tr></table></body></html>`;
 }

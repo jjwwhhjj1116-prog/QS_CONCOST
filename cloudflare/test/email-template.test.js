@@ -18,6 +18,15 @@ test('empty preview stays branded and does not claim verified zero',()=>{
   const p=buildPreview([],time);assert.equal(p.items.length,0);
   assert.ok(p.html.includes('실제 공고가 없다는 뜻은 아니며'));assert.ok(p.html.includes('concost-logo.png'));
 });
+
+test('today overview keeps sent news and notices, delivery still excludes them',()=>{
+  const news={...bid,kind:'news',source_key:'news',category:'건설 주요뉴스'};
+  const sent=[digestItemKey(bid),digestItemKey(news)];
+  const overview=buildPreview([bid,news],time,sent,true);
+  assert.equal(overview.items.length,2);assert.equal(overview.old_notices.length,0);
+  assert.ok(overview.html.includes('발송 완료 자료 포함'));
+  assert.equal(buildPreview([bid,news],time,sent).items.length,0);
+});
 test('dedup uses kind and variant; malicious source content cannot execute',()=>{
   const p=buildPreview([bid,bid,{...bid,variant:'001'},{...bid,kind:'news'}],time);assert.equal(p.items.length,3);
   const attack=buildPreview([{...bid,title:'<script>alert(1)</script>',url:'javascript:alert(1)',institution:'<img onerror=alert(1)>'}],time);

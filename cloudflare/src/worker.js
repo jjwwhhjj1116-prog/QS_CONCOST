@@ -164,10 +164,12 @@ export default {
         const settings=await emailSettings(env);
         const {results:days}=await env.DB.prepare('SELECT day,state,created_at,error FROM delivery_days ORDER BY day DESC LIMIT 7').all();
         const {results:counts}=await env.DB.prepare("SELECT day,status,COUNT(*) AS count,SUM(CASE WHEN provider_id<>'' THEN 1 ELSE 0 END) AS provider_accepted FROM deliveries GROUP BY day,status ORDER BY day DESC LIMIT 30").all();
+        const {results:attempts}=await env.DB.prepare("SELECT value FROM settings WHERE key LIKE 'scheduler:digest:%' ORDER BY key DESC LIMIT 35").all();
         return json({scheduler_enabled:settings.scheduler_active,mail_enabled:settings.enabled,mail_mode:env.MAIL_MODE,
           provider_configured:settings.provider_configured,from_configured:Boolean(settings.from_email),recipient_count:settings.recipients.length,
           timezone:'Asia/Seoul',collection_window:'월~금 09:00~09:55',send_time:'월~금 10:00',
-          last_scheduler_event:await getSetting(env,'last_scheduler_event'),last_scheduler_error:await getSetting(env,'last_scheduler_error'),days,counts});
+          last_scheduler_event:await getSetting(env,'last_scheduler_event'),last_scheduler_error:await getSetting(env,'last_scheduler_error'),days,counts,
+          attempts:attempts.map(r=>JSON.parse(r.value))});
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/session')
         return json({ authenticated: await sessionValid(request,env), trial: true });
@@ -247,17 +249,25 @@ export default {
   },
   async scheduled(controller, env) {
     if (env.SCHEDULE_ENABLED !== 'true') return;
-    // Use actual execution time too: never backfill a delayed event after cutoff.
+    // Retry only in the original 10:00-10:04 delivery window, never next day.
     const action = scheduleAction(controller.scheduledTime);
-    if (action !== scheduleAction(Date.now())) return;
     if(!action)return;
+    const now=Date.now(),k=kstParts(now),eventDay=kstParts(controller.scheduledTime).date;
+    const auditKey=`scheduler:${action}:${eventDay}:${new Date(controller.scheduledTime).toISOString()}`;
+    const audit=async(state,error='')=>setSetting(env,auditKey,JSON.stringify({day:eventDay,at:new Date(now).toISOString(),state,error}));
+    if (eventDay!==k.date || action !== scheduleAction(now)) {await audit('skipped','outside_schedule_window');return;}
     await setSetting(env,'last_scheduler_event',`${new Date().toISOString()} ${action}`);
+    await audit('started');
     try {
       if (action === 'collect') await startCollection(env, 24, true);
-      if (action === 'digest'&&env.MAIL_MODE==='live') await queueDigest(env);
+      if (action === 'digest') {
+        const result=await queueDigest(env);
+        await audit(result.already_sent?'already_sent':'queued');
+      } else await audit('queued');
       await setSetting(env,'last_scheduler_error','');
     } catch(error) {
       const code=/^[a-z_0-9]+$/.test(error.message)?error.message:'scheduled_job_failed';
+      await audit('failed',code);
       await setSetting(env,'last_scheduler_error',code);throw new Error(code);
     }
   },

@@ -11,7 +11,7 @@
     "run_worker_first": true
   },
   "vars": { "SCHEDULE_ENABLED": "true", "MAIL_MODE": "live" },
-  "triggers": { "crons": ["0 0 * * MON-FRI", "0 1 * * MON-FRI"] },
+  "triggers": { "crons": ["0 0 * * MON-FRI", "0-4 1 * * MON-FRI"] },
   "d1_databases": [{
     "binding": "DB", "database_name": "concost-migration-trial",
     "database_id": "ba8009cf-c015-4c98-ab01-d0e7f0768586",

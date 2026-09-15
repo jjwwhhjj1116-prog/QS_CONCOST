@@ -8,7 +8,7 @@ export function scheduleAction(time) {
   const k = kstParts(time);
   if (k.weekday === 0 || k.weekday === 6) return null;
   if (k.hour === 9 && k.minute < 55) return 'collect';
-  if (k.hour === 10 && k.minute === 0) return 'digest';
+  if (k.hour === 10 && k.minute <= 4) return 'digest';
   return null; // Never send a missed 10:00 digest hours later.
 }
 

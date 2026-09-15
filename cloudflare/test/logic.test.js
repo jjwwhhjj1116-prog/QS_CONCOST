@@ -8,7 +8,9 @@ test('KST weekday windows reject weekend and late mail', () => {
   assert.equal(action('2026-09-08T09:54:00+09:00'), 'collect');
   assert.equal(action('2026-09-08T09:55:00+09:00'), null);
   assert.equal(action('2026-09-08T10:00:00+09:00'), 'digest');
-  assert.equal(action('2026-09-08T10:01:00+09:00'), null);
+  assert.equal(action('2026-09-08T10:01:00+09:00'), 'digest');
+  assert.equal(action('2026-09-08T10:04:59+09:00'), 'digest');
+  assert.equal(action('2026-09-08T10:05:00+09:00'), null);
   assert.equal(action('2026-09-12T10:00:00+09:00'), null);
 });
 test('only dated today items, no old/undated/cancelled digest entries', () => {
