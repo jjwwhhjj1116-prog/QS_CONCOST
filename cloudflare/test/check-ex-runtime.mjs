@@ -5,7 +5,7 @@ const {outputFiles}=await build({stdin:{contents:`
 import {collectExtraPage} from './src/extra-sources.js';
 export default {async fetch(){
   const results=[];
-  for(const source_id of ['ex-CT','ex-SV']) {
+  for(const source_id of ${JSON.stringify(process.argv.length>2?process.argv.slice(2):['ex-CT','ex-SV'])}) {
     try {const r=await collectExtraPage({source_id,next_page:1,start_date:'202609250000',end_date:'202609282359'},{});
       results.push({source_id,candidates:r.candidates,kept:r.rows.length});}
     catch(e){results.push({source_id,error:e.name,message:e.message});}

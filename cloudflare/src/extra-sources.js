@@ -74,7 +74,12 @@ export function parseBoard(page, sourceId) {
     }
   } else {
     for(const match of page.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
-      const block=match[1], date=dateOnly(clean(block));
+      // Read a date cell, not a notice number or a date mentioned in the title.
+      // Splitting also handles municipal HTML with an unclosed department <td>.
+      const block=match[1], date=block.split(/<td\b[^>]*>/i).slice(1)
+        .map(cell=>clean(cell.split(/<\/td>/i)[0]))
+        .filter(cell=>/^20\d{2}[-./]\d{1,2}[-./]\d{1,2}$/.test(cell))
+        .map(dateOnly).find(Boolean)||'';
       if(parser==='molit') {
         const m=block.match(/href="([^"]*dtl\.jsp\?[^"]*id=(\d+)[^"]*)"[^>]*>([\s\S]*?)<\/a>/i);
         if(m)add(m[2],m[3],date,clean(m[1]));
@@ -149,7 +154,21 @@ export function extraJobs(now,lookback,scope='all') {
 export async function collectExtraPage(job,env,fetcher=fetch) {
   const id=job.source_id;
   if(OTHER_BIDS[id])return collectOtherBid(job,env,fetcher,requestText);
-  if(BOARDS[id])return parseBoard(await requestText(BOARDS[id][1],fetcher),id);
+  if(BOARDS[id]) {
+    // MOLIT sets a visitor cookie on a same-URL 307. Fetch has no cookie jar.
+    // One retry only, with the original timeout; never forward cookies elsewhere.
+    const boardFetch=id==='news-molit'?async(url,init)=>{
+      const response=await fetcher(url,{...init,redirect:'manual'});
+      const location=response.headers.get('location');
+      const cookies=response.headers.getSetCookie();
+      if(response.status===307 && location && new URL(location,url).href===String(url) && cookies.length) {
+        await response.body?.cancel();
+        return fetcher(url,{...init,redirect:'manual',headers:{...init.headers,Cookie:cookies.map(x=>x.split(';')[0]).join('; ')}});
+      }
+      return response;
+    }:fetcher;
+    return parseBoard(await requestText(BOARDS[id][1],boardFetch),id);
+  }
   let url,items,total,normalize;
   if(id.startsWith('law-')) {
     if(!env.LAW_API_OC)throw new Error('missing_law_api_key');

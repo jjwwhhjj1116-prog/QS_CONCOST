@@ -74,6 +74,14 @@ test('Busan redevelopment JS links become real links without borrowing adjacent 
   const result=parseBoard(html,'jiwon-busan-rebuild');assert.equal(result.rows.length,1);assert.equal(result.rows[0].published_at,'');
   assert.match(result.rows[0].url,/ntt_id=42/);
 });
+
+test('agency dates come from cells, not notice numbers; malformed department cells are tolerated',()=>{
+  for(const number of ['2026-1458','2026-0222']) {
+    const html=`<tr><td>공고 제${number}호</td><td><a href="./selectEminwonWebView.do?notAncmtMgtNo=42">공사비 검증 용역</a></td><td>주거정비과<td>2026-09-22</td><td>2026-09-30</td></tr>`;
+    assert.equal(parseBoard(html,'jiwon-ddm').rows[0].published_at,'2026-09-22');
+  }
+  assert.equal(parseBoard('<tr><td><a href="./board.do?id=42">2026-02-22 공사비 검증 용역</a></td></tr>','jiwon-ddm').rows[0].published_at,'');
+});
 test('pipeline and contract identities/amounts keep their own meanings',()=>{
   const row=normalizeIntelligence({untyCntrctNo:'a',cntrctNm:'공사비 검증 용역',totCntrctAmt:'10,000',cntrctDate:'20260908'},'contract-Servc');
   assert.equal(row.kind,'cost');assert.equal(row.contract_amount,10000);assert.equal(row.award_amount,null);
@@ -97,6 +105,25 @@ test('K-apt uses the current V3 service and retains date/pagination guards',asyn
 });
 test('response byte limit stops oversized upstream data',async()=>{
   await assert.rejects(requestText('https://example.org',async()=>new Response('x'.repeat(1500001))),/too_large/);
+});
+
+test('MOLIT same-URL visitor redirect retains cookie once without leaking across origins',async()=>{
+  const url='https://www.molit.go.kr/USR/NEWS/m_71/lst.jsp?lcmspage=1';
+  let calls=0,signal;
+  const result=await collectExtraPage({source_id:'news-molit'},{},async(u,init)=>{
+    assert.equal(String(u),url);assert.equal(init.redirect,'manual');
+    if(++calls===1){signal=init.signal;return new Response(null,{status:307,headers:{Location:url,'Set-Cookie':'visitor=fixture; Path=/; Secure'}});}
+    assert.equal(init.signal,signal);assert.equal(init.headers.Cookie,'visitor=fixture');
+    return new Response('<table><tr><td><a href="dtl.jsp?id=42">건설 공사비 정책 발표</a></td><td>2026-09-28</td></tr></table>');
+  });
+  assert.equal(calls,2);assert.equal(result.rows.length,1);assert.equal(result.rows[0].published_at,'2026-09-28');
+  for(const location of [url,'https://other.example/']) {
+    calls=0;
+    await assert.rejects(collectExtraPage({source_id:'news-molit'},{},async()=>{
+      calls++;return new Response(null,{status:307,headers:{Location:location,'Set-Cookie':'visitor=fixture'}});
+    }),/upstream_http_307/);
+    assert.equal(calls,location===url?2:1);
+  }
 });
 
 test('expressway initial request and body failures retain safe actionable errors',async()=>{
