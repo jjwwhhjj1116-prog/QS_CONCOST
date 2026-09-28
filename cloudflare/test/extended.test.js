@@ -98,6 +98,18 @@ test('K-apt uses the current V3 service and retains date/pagination guards',asyn
 test('response byte limit stops oversized upstream data',async()=>{
   await assert.rejects(requestText('https://example.org',async()=>new Response('x'.repeat(1500001))),/too_large/);
 });
+
+test('expressway initial request and body failures retain safe actionable errors',async()=>{
+  const job={source_id:'ex-CT',next_page:1,start_date:'202609250000',end_date:'202609282359'};
+  await assert.rejects(collectExtraPage(job,{},async()=>{throw Error('sensitive upstream URL');}),/upstream_timeout_or_network/);
+  await assert.rejects(collectExtraPage(job,{},async()=>new Response(new ReadableStream({start(c){c.error(Error('sensitive body failure'));}}))),/upstream_body_timeout_or_network/);
+  await assert.rejects(collectExtraPage(job,{},async()=>new Response('x'.repeat(1500001))),/upstream_response_too_large/);
+  let calls=0;
+  await assert.rejects(collectExtraPage(job,{},async()=>++calls===1
+    ?new Response('<meta name="_csrf" content="fixture">',{headers:{'Set-Cookie':'session=fixture; Path=/'}})
+    :new Response('<html>upstream unavailable</html>')),/upstream_invalid_json/);
+  assert.equal(calls,2);
+});
 test('D1 encryption survives empty save and wrong encryption key fails closed',async()=>{
   const {env}=fixture();await saveSecret(env,'RESEND_API_KEY','test-secret-value');await saveSecret(env,'RESEND_API_KEY','');
   assert.equal(await getSecret({...env},'RESEND_API_KEY'),'test-secret-value');

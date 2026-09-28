@@ -37,7 +37,10 @@ export async function requestText(url, fetcher = fetch, init={}) {
   const reader = response.body.getReader(); let size=0; const chunks=[];
   try { while (true) { const {done,value}=await reader.read(); if(done)break;
     size+=value.length; if(size>1500000)throw new Error('upstream_response_too_large'); chunks.push(value); }
-  } finally { await reader.cancel(); }
+  } catch(error) {
+    if(error.message==='upstream_response_too_large')throw error;
+    throw new Error('upstream_body_timeout_or_network');
+  } finally { await reader.cancel().catch(()=>{}); }
   const bytes=new Uint8Array(size); let offset=0; for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
   const charset=response.headers.get('content-type')?.match(/charset=([\w-]+)/i)?.[1] || 'utf-8';
   return new TextDecoder(charset).decode(bytes).replace(/^\uFEFF/,'');

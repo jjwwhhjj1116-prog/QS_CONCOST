@@ -37,13 +37,15 @@ export function xmlResponse(text) {
 export async function collectOtherBid(job,env,fetcher,requestText) {
   const id=job.source_id;let url,items,total;
   if(id.startsWith('ex-')) {
-    const home=await fetcher('https://ebid.ex.co.kr/default.do',{signal:AbortSignal.timeout(15000),headers:{'User-Agent':'CONCOST/1.0'}});
-    if(!home.ok)throw new Error(`upstream_http_${home.status}`);
-    const html=await home.text();if(html.length>1500000)throw new Error('upstream_response_too_large');
+    let homeHeaders;
+    const html=await requestText('https://ebid.ex.co.kr/default.do',async(...args)=>{
+      const response=await fetcher(...args);homeHeaders=response.headers;return response;
+    });
     const csrf=html.match(/name="_csrf" content="([^"]+)"/)?.[1];if(!csrf)throw new Error('upstream_csrf_missing');
-    const cookie=home.headers.getSetCookie().map(x=>x.split(';')[0]).join('; ');
+    const cookie=homeHeaders.getSetCookie().map(x=>x.split(';')[0]).join('; ');
     const text=await requestText('https://ebid.ex.co.kr/findPagingPortalBidNotiList.do',fetcher,{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json;charset=UTF-8','X-CSRF-TOKEN':csrf,menucode:'HOME'},body:JSON.stringify({noti_cls:id.slice(3)})});
-    items=JSON.parse(text).result_list;if(!Array.isArray(items))throw new Error('upstream_invalid_list');total=items.length;
+    let payload;try {payload=JSON.parse(text);}catch {throw new Error('upstream_invalid_json');}
+    items=payload?.result_list;if(!Array.isArray(items))throw new Error('upstream_invalid_list');total=items.length;
   } else {
     if(!env.DATA_GO_KR_SERVICE_KEY)throw new Error('missing_api_key');
     const params={serviceKey:env.DATA_GO_KR_SERVICE_KEY,pageNo:job.next_page,numOfRows:PAGE_SIZE,_type:'json'};

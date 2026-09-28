@@ -108,6 +108,15 @@ npx wrangler dev --local
 
 ### 2026-09-28 재개 체크포인트: 공동주택 API 주소 복구
 
+- 후속: `63fb1a2` 자동배포 실행 `36370785544` verify/deploy success 확인.
+
+### 2026-09-28 재개 체크포인트: 도로공사 실패 경로 보강
+
+- 도로공사 기존 코드와 변경 코드 모두 로컬 workerd 실제 공개 조회에서 공사/용역 후보 각각 5건, 기간/적합도 선별 0건. 운영 Cloudflare collection_failed의 근본 원인은 아직 확정 못함; 로컬 성공을 운영 복구로 해석하지 말 것.
+- 첫 화면 요청도 공통 15초 제한/스트리밍 1.5MB 제한/오류 분류를 적용했다. 기존 home.text() 전체 로드 후 크기 검사 제거. 목록의 비JSON 응답 및 본문 중간 전송 실패를 비밀값 없는 명시적 오류로 기록한다. 실패를 0건 성공으로 바꾸지 않음.
+- Node 48/48 통과. `cd cloudflare; node test/check-ex-runtime.mjs` 읽기 전용 실제 조회 재현. 이 스크립트는 기존 esbuild/miniflare로 실행하며 DB/메일/배포를 수행하지 않는다.
+- 다음: 이 변경의 자동배포 확인 후 운영 수집 오류코드 대조. LH/서울교통공사 526 및 국토부 시간초과는 남음. 관리자 세션 없이 실제 운영 재수집은 이번 단계에서 실행하지 않음.
+
 - 시작 HEAD `1b1b408`, migration 브랜치, dirty 없음. 앱 종료에 대비해 기관별로 수정/검증/배포를 분리한다.
 - K-apt V2 실호출은 HTTP 400 / `NO_OPENAPI_SERVICE_ERROR` / 12. 공식 https://www.data.go.kr/data/15058166/openapi.do 내 Swagger는 V3다. JS/Python 주소를 V3로 최소 변경했다(포니테일 적용).
 - 실제 V3 조회 2026-09-25~28: HTTP 200, resultCode 00, 총 95건 / 첫 페이지 10건 / 첫 등록일 2026-09-28. 적합도 선별 전 건수이며 운영 저장 완료를 의미하지 않는다. `python cloudflare/test/check-kapt.py`로 재현(키/URL 미출력).
