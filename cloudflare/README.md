@@ -113,6 +113,7 @@ npx wrangler dev --local
 - 자동 배포 인증은 GitHub Actions Secret `CLOUDFLARE_API_TOKEN`으로만 제공한다. 개인 Wrangler 로그인 토큰을 복사하지 않는다. 인증 미등록은 명시적 실패이며 배포 완료로 간주하지 않는다.
 - 배포는 직렬 실행한다. 배포 후 공개 상태 API에서 예약/메일 설정을 확인하지만 이것은 원기관 수집 완료나 수신함 도착 검증이 아니다. DB 삭제·자동 마이그레이션·실제 시험메일·무한 재시도는 하지 않는다.
 - 2026-09-28 확인: 기존 GitHub 수집은 active, 메일은 disabled_manually였음. 수집도 비활성화하여 Render 중복 실행을 방지한다. 자동 배포 실제 성공은 인증 등록 후 Actions 결과로 별도 확인해야 한다.
+- 2026-09-28 후속 완료: 사용자 승인으로 계정 토큰 `concost-github-deploy`를 생성하고 `CLOUDFLARE_API_TOKEN` Secret 등록. Workers Scripts/Queues Write, D1/Account Settings Read 네 권한만 부여했다. 토큰 원문은 코드·파일·로그에 저장하지 않음. GitHub 실행 `36366865366` 재실행에서 verify/deploy 모두 success, 배포 후 공개 예약·메일 설정 검사도 통과. 실제 다음 예약 수집·메일 수신함 도착 및 기존 기관별 오류 복구와는 별개다.
 
 - 시작: `codex/cloudflare-migration`, HEAD `869a5bc`, 미커밋 변경 없음. 아래 기록은 이전 진단보다 최신이다.
 - 원인: 오전 수집의 최근 24시간 범위와 메일의 당일 등록 조건이 달라 전날 오후 공고가 계속 제외됨. 실제 9/23 수집은 적합 공고 3건을 저장했지만 메일 공고는 0건이었다. 월요일 24시간 조회는 주말 누락 위험도 있었다.
