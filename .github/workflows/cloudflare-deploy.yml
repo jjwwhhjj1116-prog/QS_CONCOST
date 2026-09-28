@@ -1,0 +1,75 @@
+name: CONCOST tested Cloudflare deployment
+
+on:
+  push:
+    branches: [codex/cloudflare-migration]
+    paths:
+      - 'cloudflare/**'
+      - 'tender_radar/**'
+      - 'tests/**'
+      - '.github/workflows/cloudflare-deploy.yml'
+  pull_request:
+    branches: [codex/cloudflare-migration]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: concost-cloudflare-deploy
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --ignore-scripts
+        working-directory: cloudflare
+      - run: npm test
+        working-directory: cloudflare
+      - run: python -m unittest tests.test_free_worker -q
+      - run: npx wrangler deploy --dry-run
+        working-directory: cloudflare
+
+  deploy:
+    needs: verify
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/codex/cloudflare-migration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: '65161355e2b641a4a878f1826259842c'
+    steps:
+      - name: Require deployment credential
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo '::error::Register CLOUDFLARE_API_TOKEN in repository Actions secrets. No deployment performed.'
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: cloudflare
+      # Schema changes require their own reviewed migration; never auto-delete data.
+      - run: npx wrangler deploy
+        working-directory: cloudflare
+      - name: Check public service without collecting or sending mail
+        run: |
+          curl --fail --retry 3 --retry-all-errors --max-time 30 \
+            https://concost-migration-trial.jjwwhhjj1116.workers.dev/api/automation/status \
+            -o /tmp/concost-status.json
+          node -e "const s=require('/tmp/concost-status.json'); if(!s.scheduler_enabled || !s.mail_enabled || !s.provider_configured || !s.from_configured || !s.recipient_count || s.mail_mode!=='live') throw Error('Automation configuration unhealthy'); console.log('Scheduler/mail configuration check passed; inbox delivery not tested.');"
