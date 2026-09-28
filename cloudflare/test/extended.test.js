@@ -27,6 +27,38 @@ const request=(path,method='GET',body,extra={})=>new Request('https://trial.exam
 test('new collector manifests are bounded and independent; no homepage discovery',()=>{
   const jobs=extraJobs(Date.now(),48);assert.ok(jobs.length<50);assert.equal(new Set(jobs.map(j=>j.source_id)).size,jobs.length);
   assert.ok(extraJobs(Date.now(),48,'jiwon').every(j=>j.source_id.startsWith('jiwon-')));
+  assert.ok(extraJobs(Date.now(),1,'brief').every(j=>!/^contract-|^award-|^plan-|^spec-|^request-/.test(j.source_id)));
+});
+
+test('Monday covers the weekend; later ticks resume after completed jobs without manual run limit',async t=>{
+  const {env,db}=fixture();env.SCHEDULE_ENABLED='true';
+  let now=Date.parse('2026-09-28T09:00:30+09:00');t.mock.method(Date,'now',()=>now);
+  await worker.scheduled({scheduledTime:now},env);
+  assert.equal(db.prepare("SELECT min(start_date) d FROM collection_jobs WHERE source_id='g2b-service'").get().d,'202609250900');
+  const n=env.COLLECTION_QUEUE.messages.length;
+  await worker.scheduled({scheduledTime:now},env);assert.equal(env.COLLECTION_QUEUE.messages.length,n);
+  for(const minute of [10,20,30,40,50]) {
+    db.exec("UPDATE collection_jobs SET state='succeeded'");
+    now=Date.parse(`2026-09-28T09:${minute}:30+09:00`);
+    await worker.scheduled({scheduledTime:now},env);
+    const run=`2026-09-28-9-${minute/5}`;
+    assert.ok(db.prepare('SELECT count(*) n FROM collection_jobs WHERE run_id=?').get(run).n>0);
+    assert.equal(db.prepare("SELECT count(*) n FROM collection_jobs WHERE run_id=? AND source_id LIKE 'contract-%'").get(run).n,0);
+  }
+  assert.equal(db.prepare('SELECT count(DISTINCT run_id) n FROM collection_jobs').get().n,6);
+});
+
+test('analytics exhausts its share without taking notice budget; global daily limit still applies',async t=>{
+  const {env,db}=fixture();let now=Date.parse('2026-09-28T09:00:30+09:00');t.mock.method(Date,'now',()=>now);
+  env.SCHEDULE_ENABLED='true';await worker.scheduled({scheduledTime:now},env);
+  db.prepare('INSERT INTO trial_budget VALUES (?,?)').run('2026-09-28:analytics',200);
+  t.mock.method(globalThis,'fetch',async()=>Response.json({response:{header:{resultCode:'00'},body:{items:[],totalCount:0}}}));
+  const job=id=>db.prepare('SELECT id,next_page FROM collection_jobs WHERE source_id=? LIMIT 1').get(id);
+  const consume=async id=>{const j=job(id);await worker.queue({messages:[{body:{id:j.id,page:j.next_page},attempts:3,ack(){},retry(){throw Error('unexpected retry');}}]},env);return db.prepare('SELECT state,error FROM collection_jobs WHERE id=?').get(j.id);};
+  assert.equal((await consume('contract-Servc')).error,'trial_daily_page_limit');
+  assert.equal((await consume('g2b-service')).state,'succeeded');
+  db.prepare('INSERT INTO trial_budget VALUES (?,?)').run('2026-09-28',799);
+  assert.equal((await consume('g2b-construction')).error,'trial_daily_page_limit');
 });
 test('dates never invent today and normalize compact law timestamps',()=>{
   assert.equal(dateOnly('20260908'),'2026-09-08');assert.equal(dateOnly('2026.09.08'),'2026-09-08');

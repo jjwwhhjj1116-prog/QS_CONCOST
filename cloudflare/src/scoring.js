@@ -36,6 +36,7 @@ export function scoreNotice(...parts) {
 }
 export function shouldKeep(row) {
   if (row.score < rules.MIN_NOTICE_SCORE) return false;
+  if (/클레임차트|연구비 정산/.test(row.title||'')) return false;
   const text = [row.title, row.institution, row.region, row.category, row.source, ...(row.matched_keywords || [])].join(' ').toLowerCase();
   if (!rules.SAFETY_DIAGNOSIS_TERMS.some(x => text.includes(x.toLowerCase()))) return true;
   const place = [row.title, row.institution, row.region, row.source].join(' ').toLowerCase();

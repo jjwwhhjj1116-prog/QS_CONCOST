@@ -1,24 +1,29 @@
-import { kstParts, todayDigest, dateOnly } from './logic.js';
+import { kstParts, todayDigest, dateOnly,noticeOpen } from './logic.js';
+import {shouldKeep} from './scoring.js';
 import { getSetting, getSecret, emailSettings } from './settings.js';
 import {renderEmail,emailUrl} from './email-template.js';
 export const digestItemKey=row=>JSON.stringify([row.kind,row.source,row.source_key,row.variant||'']);
 export function buildPreview(rows,time=Date.now(),sentKeys=[],includeSentToday=false,collectionNote='') {
   const date=kstParts(time).date;
   const sent=new Set(sentKeys),seen=new Set();
-  const unique=rows.filter(row=>{const key=digestItemKey(row);if(seen.has(key))return false;seen.add(key);return true;});
+  const unique=rows.filter(row=>{if(row.kind==='notice'&&!shouldKeep(row))return false;const key=digestItemKey(row);if(seen.has(key))return false;seen.add(key);return true;});
   const selected=todayDigest(unique,time).filter(row=>(includeSentToday||!sent.has(digestItemKey(row)))&&(row.kind==='news'||row.kind==='notice'&&row.score>=40));
   const rank=(a,b)=>(Number(b.score)||0)-(Number(a.score)||0)||String(b.published_at).localeCompare(String(a.published_at));
   const newNotices=selected.filter(r=>r.kind==='notice').sort(rank).slice(0,30);
+  const since=kstParts(time-7*86400000).date;
+  const pendingNotices=unique.filter(r=>r.kind==='notice'&&r.score>=40&&!sent.has(digestItemKey(r))&&
+    dateOnly(r.published_at)>=since&&dateOnly(r.published_at)<date&&
+    dateOnly(r.deadline_at)&&noticeOpen(r,time)).sort(rank).slice(0,30);
   const newNews=selected.filter(r=>r.kind==='news').sort(rank).slice(0,20);
   const oldNotices=unique.filter(r=>r.kind==='notice'&&r.score>=40&&sent.has(digestItemKey(r))&&dateOnly(r.published_at)&&(includeSentToday?dateOnly(r.published_at)<date:dateOnly(r.published_at)<=date)&&
-    !['취소','마감'].includes(r.notice_type)&&(!dateOnly(r.deadline_at)||dateOnly(r.deadline_at)>=date)).sort(rank).slice(0,12);
+    noticeOpen(r,time)).sort(rank).slice(0,12);
   const news=newNews.filter(r=>r.category!=='법규·제도 개정'),laws=newNews.filter(r=>r.category==='법규·제도 개정');
-  const items=[...newNotices,...newNews];
-  const counts={new_notices:newNotices.length,old_notices:oldNotices.length,new_news:newNews.length,construction_news:news.length,law_news:laws.length};
-  const subject=`[CONCOST] ${date} 건설 기회 브리핑 · 신규 공고 ${newNotices.length}건`;
-  const html=renderEmail({date,newNotices,oldNotices,news,laws,includeSentToday,collectionNote});
-  const text=[subject,collectionNote,...[['신규 입찰공고',newNotices],['기존 알림 프로젝트',oldNotices],['건설 주요뉴스',news],['법규·제도 개정',laws]].flatMap(([label,list])=>['',label,...list.map(r=>`${r.title} (${r.source}) ${emailUrl(r)}`)])].join('\n');
-  return {subject,html,text,counts,items,old_notices:oldNotices,date};
+  const items=[...newNotices,...pendingNotices,...newNews];
+  const counts={new_notices:newNotices.length,pending_notices:pendingNotices.length,old_notices:oldNotices.length,new_news:newNews.length,construction_news:news.length,law_news:laws.length};
+  const subject=`[CONCOST] ${date} 건설 기회 브리핑 · 당일 공고 ${newNotices.length}건 · 미발송 공고 ${pendingNotices.length}건`;
+  const html=renderEmail({date,newNotices,pendingNotices,oldNotices,news,laws,includeSentToday,collectionNote});
+  const text=[subject,collectionNote,...[['당일 등록 입찰공고',newNotices],['최근 7일 미발송·진행 중 공고',pendingNotices],['기존 알림 프로젝트',oldNotices],['건설 주요뉴스',news],['법규·제도 개정',laws]].flatMap(([label,list])=>['',label,...list.map(r=>`${r.title} (${r.source}) 등록 ${r.published_at} ${emailUrl(r)}`)])].join('\n');
+  return {subject,html,text,counts,items,pending_notices:pendingNotices,old_notices:oldNotices,date};
 }
 // One-off authorization from the user; expires without changing the daily schedule.
 const recoveryDay='2026-09-09',recoverySource='2026-09-08';

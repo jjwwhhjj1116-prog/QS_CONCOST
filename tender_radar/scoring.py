@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-SCORING_VERSION = "concost-consulting-v6"
+SCORING_VERSION = "concost-consulting-v7"
 MIN_NOTICE_SCORE = 40
 
 # CONCOST는 시공사가 아니라 공사비·원가·안전·계약 전문 컨설팅 회사다.
@@ -68,7 +68,7 @@ DIRECT_CONSTRUCTION = {
 }
 
 IRRELEVANT = ("식자재", "보험", "단순 임대", "폐기물 운반", "청소용역", "경비용역",
-              "자동차사고", "개인정보 영향평가")
+              "자동차사고", "개인정보 영향평가", "클레임차트", "연구비 정산")
 
 SAFETY_DIAGNOSIS_TERMS = (
     "정밀안전진단", "정밀안전점검", "안전진단", "안전점검",
@@ -158,6 +158,8 @@ def is_seoul_notice(notice: dict[str, object]) -> bool:
 
 def should_keep_notice(notice: dict[str, object], min_score: int = MIN_NOTICE_SCORE) -> bool:
     if int(notice.get("score") or 0) < min_score:
+        return False
+    if any(term in str(notice.get("title") or "") for term in ("클레임차트", "연구비 정산")):
         return False
     if is_safety_diagnosis_notice(notice) and not is_seoul_notice(notice):
         return False

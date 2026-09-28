@@ -138,7 +138,7 @@ export function extraJobs(now,lookback,scope='all') {
   let ids=Object.keys(BOARDS);
   if(scope==='jiwon')ids=ids.filter(x=>x.startsWith('jiwon-'));
   else if(scope==='news')ids=ids.filter(x=>x.startsWith('news-'));
-  else ids.push(...Object.keys(INTELLIGENCE),...Object.keys(OTHER_BIDS));
+  else ids.push(...(scope==='brief'?[]:Object.keys(INTELLIGENCE)),...Object.keys(OTHER_BIDS));
   if(scope!=='jiwon')ids.push(...LAW_QUERIES.map((_,i)=>`law-${i}`));
   return ids.map(source_id=>({source_id,label:BOARDS[source_id]?.[0]||OTHER_BIDS[source_id]||INTELLIGENCE[source_id]?.slice(1,3).join(' ')||`국가법령 ${LAW_QUERIES[Number(source_id.slice(4))]}`,
     start_date:fmt(now-lookback*3600000),end_date:fmt(now)}));

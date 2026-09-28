@@ -6,17 +6,41 @@ const bid={kind:'notice',source:'나라장터',source_key:'1',title:'공사비 �
 test('incumbent brand, counts, cards and category sections are restored',()=>{
   const p=buildPreview([bid,{...bid,kind:'news',source_key:'2',category:'건설 주요뉴스'},{...bid,kind:'news',source_key:'3',category:'법규·제도 개정'}],time);
   for(const text of ['concost-logo.png','오늘의 건설 기회 브리핑','신규 입찰공고','기존 알림 프로젝트','건설 주요뉴스','법규·제도 개정','적합도','테스트 조합','125,000,000원','2026-09-30','https://example.org/bid'])assert.ok(p.html.includes(text),text);
-  assert.deepEqual(p.counts,{new_notices:1,old_notices:0,new_news:2,construction_news:1,law_news:1});
+  assert.deepEqual(p.counts,{new_notices:1,pending_notices:0,old_notices:0,new_news:2,construction_news:1,law_news:1});
 });
 test('only confirmed sent open bids are existing, old news never repeats as new',()=>{
   const old={...bid,source_key:'old',published_at:'2026-09-08'},unknown={...old,source_key:'unknown'},oldNews={...old,kind:'news',source_key:'news'};
   const p=buildPreview([bid,old,unknown,oldNews,{...old,source_key:'closed',notice_type:'마감'}],time,[digestItemKey(old),digestItemKey(oldNews),digestItemKey({...old,source_key:'closed'})]);
-  assert.deepEqual(p.items,[bid]);assert.deepEqual(p.old_notices,[old]);assert.equal(p.counts.old_notices,1);
+  assert.deepEqual(p.items,[bid,unknown]);assert.deepEqual(p.old_notices,[old]);assert.equal(p.counts.old_notices,1);
   assert.equal(buildPreview([bid],time,[digestItemKey(bid)]).counts.new_notices,0);
+});
+
+test('previous afternoon and Friday bids are carried separately, never old news or already sent bids',()=>{
+  const monday=Date.parse('2026-09-28T10:00:00+09:00');
+  const rows=[{...bid,source_key:'friday',published_at:'2026-09-25 14:00:00'},
+    {...bid,source_key:'too-old',published_at:'2026-09-20'},
+    {...bid,source_key:'closed',published_at:'2026-09-25',deadline_at:'2026-09-27'},
+    {...bid,source_key:'unknown-deadline',published_at:'2026-09-25',deadline_at:''},
+    {...bid,kind:'news',source_key:'old-news',published_at:'2026-09-25'}];
+  const p=buildPreview(rows,monday);
+  assert.equal(p.counts.new_notices,0);assert.equal(p.counts.pending_notices,1);
+  assert.deepEqual(p.items.map(r=>r.source_key),['friday']);
+  assert.match(p.html,/최근 7일 미발송/);assert.match(p.html,/2026-09-25 14:00:00/);
+  assert.equal(buildPreview(rows,monday,[digestItemKey(rows[0])]).counts.pending_notices,0);
 });
 test('empty preview stays branded and does not claim verified zero',()=>{
   const p=buildPreview([],time);assert.equal(p.items.length,0);
   assert.ok(p.html.includes('실제 공고가 없다는 뜻은 아니며'));assert.ok(p.html.includes('concost-logo.png'));
+});
+
+test('backlog excludes elapsed intraday deadlines and non-construction claim/accounting jobs',()=>{
+  const now=Date.parse('2026-09-09T10:30:00+09:00');
+  const previous={...bid,published_at:'2026-09-08'};
+  const rows=[{...previous,source_key:'elapsed',deadline_at:'2026-09-09 10:00:00'},
+    {...previous,source_key:'patent',title:'특허 클레임차트 분석 용역',score:72},
+    {...previous,source_key:'accounting',title:'연구비 정산 용역',score:45},
+    {...previous,source_key:'cost',title:'공사비 검증 용역'}];
+  assert.deepEqual(buildPreview(rows,now).pending_notices.map(r=>r.source_key),['cost']);
 });
 
 test('today overview keeps sent news and notices, delivery still excludes them',()=>{

@@ -1,5 +1,5 @@
 {
-  "SCORING_VERSION": "concost-consulting-v6",
+  "SCORING_VERSION": "concost-consulting-v7",
   "MIN_NOTICE_SCORE": 40,
   "SERVICE_GROUPS": {
     "공사비·견적": {
@@ -131,7 +131,9 @@
     "청소용역",
     "경비용역",
     "자동차사고",
-    "개인정보 영향평가"
+    "개인정보 영향평가",
+    "클레임차트",
+    "연구비 정산"
   ],
   "SAFETY_DIAGNOSIS_TERMS": [
     "정밀안전진단",

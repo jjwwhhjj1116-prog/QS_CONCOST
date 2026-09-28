@@ -4,6 +4,7 @@ import { extraJobs, collectExtraPage, BOARDS, INTELLIGENCE } from './extra-sourc
 import { sessionValid, sameOrigin, login, settingsRoute, collectionEnv, getSecret, requestBody, emailSettings, setSetting, getSetting } from './settings.js';
 import { trialUI } from './trial-ui.js';
 import { digestPreview,queueDigest,deliverMessage } from './mail.js';
+import {shouldKeep} from './scoring.js';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const kindRoutes = { '/api/notices': 'notice', '/api/news': 'news',
@@ -20,7 +21,7 @@ async function authorized(request, env) {
 async function rowsFor(env, kind) {
   const { results } = await env.DB.prepare(
     'SELECT payload FROM items WHERE kind=? ORDER BY published_at DESC LIMIT 2000').bind(kind).all();
-  return results.map(x => JSON.parse(x.payload));
+  return results.map(x => JSON.parse(x.payload)).filter(row=>kind!=='notice'||shouldKeep(row));
 }
 
 async function startCollection(env, lookback = 168, scheduled = false, scope = 'all') {
@@ -28,13 +29,16 @@ async function startCollection(env, lookback = 168, scheduled = false, scope = '
   const runId = scheduled ? `${k.date}-${k.hour}-${Math.floor(k.minute / 5)}` : crypto.randomUUID();
   const deadline = scheduled ? Date.parse(`${k.date}T09:55:00+09:00`) : now + 300000;
   if (!await getSecret(env,'DATA_GO_KR_SERVICE_KEY')) throw new Error('missing_api_key');
-  const existing=await env.DB.prepare('SELECT run_id,deadline FROM collection_gate WHERE scope=? AND deadline>?').bind(scope,now).first();
+  const gateScope=scheduled?'scheduled':scope;
+  const duplicate=scheduled?await env.DB.prepare('SELECT run_id,deadline FROM collection_jobs WHERE run_id=? LIMIT 1').bind(runId).first():null;
+  const existing=duplicate||await env.DB.prepare("SELECT run_id,deadline FROM collection_gate WHERE scope=? AND deadline>? AND EXISTS (SELECT 1 FROM collection_jobs j WHERE j.run_id=collection_gate.run_id AND j.state IN ('queued','running','retrying'))").bind(gateScope,now).first();
   if(existing)return {run_id:existing.run_id,job_id:existing.run_id,status_url:`/api/trial/jobs?run_id=${existing.run_id}`,deadline:existing.deadline,already_running:true};
-  const used = await env.DB.prepare('SELECT COUNT(DISTINCT run_id) AS total FROM collection_jobs WHERE created_at>=?')
+  const used = await env.DB.prepare("SELECT COUNT(DISTINCT run_id) AS total FROM collection_jobs WHERE created_at>=? AND run_id NOT GLOB '????-??-??-9-*'")
     .bind(Date.parse(`${k.date}T00:00:00+09:00`)).first();
-  if (used.total >= 2) throw new Error('trial_daily_run_limit');
-  const manifest = [...(scope==='all'||scope==='bids'?initialJobs(now,lookback):[]),...(scope==='bids'?[]:extraJobs(now,lookback,scope))];
-  const gate=await env.DB.prepare('INSERT INTO collection_gate VALUES (?,?,?) ON CONFLICT(scope) DO UPDATE SET run_id=excluded.run_id,deadline=excluded.deadline WHERE deadline<=?').bind(scope,runId,deadline,now).run();
+  if (!scheduled&&used.total >= 2) throw new Error('trial_daily_run_limit');
+  const manifest = [...(['all','bids','brief'].includes(scope)?initialJobs(now,lookback):[]),...(scope==='bids'?[]:extraJobs(now,lookback,scope))];
+  // Do not hold a completed run's lock until 09:55; later ticks must see new notices.
+  const gate=await env.DB.prepare("INSERT INTO collection_gate VALUES (?,?,?) ON CONFLICT(scope) DO UPDATE SET run_id=excluded.run_id,deadline=excluded.deadline WHERE deadline<=? OR (EXISTS (SELECT 1 FROM collection_jobs j WHERE j.run_id=collection_gate.run_id) AND NOT EXISTS (SELECT 1 FROM collection_jobs j WHERE j.run_id=collection_gate.run_id AND j.state IN ('queued','running','retrying')))").bind(gateScope,runId,deadline,now).run();
   if(!gate.meta.changes)throw new Error('collection_already_starting');
   const tasks = [];
   for (const source of manifest) {
@@ -75,8 +79,13 @@ async function consume(message, env) {
     .bind(Date.now(), Date.now() + 45000, task.id, task.page, Date.now()).run();
   if (!claimed.meta.changes) { message.retry({ delaySeconds: 45 }); return; }
   try {
-    const budget = await env.DB.prepare(`INSERT INTO trial_budget (day,pages) VALUES (?,1)
-      ON CONFLICT(day) DO UPDATE SET pages=pages+1 WHERE pages<1000`).bind(kstParts().date).run();
+    // Within the same 1,000-page ceiling, reserve 800 for notices/news/laws.
+    // Bulk award/contract history cannot consume the daily briefing's allowance.
+    const analytics=Boolean(INTELLIGENCE[persisted.source_id]);
+    const date=kstParts().date;
+    const budget = await env.DB.prepare(`INSERT INTO trial_budget (day,pages) SELECT ?,1
+      WHERE (SELECT coalesce(sum(pages),0) FROM trial_budget WHERE day=? OR day LIKE ?)<1000
+      ON CONFLICT(day) DO UPDATE SET pages=pages+1 WHERE pages<?`).bind(`${date}:${analytics?'analytics':'brief'}`,date,date+':%',analytics?200:800).run();
     if (!budget.meta.changes) throw new Error('trial_daily_page_limit');
     const configured=await collectionEnv(env);
     const result = /^(g2b|nuri)-/.test(persisted.source_id)
@@ -259,7 +268,10 @@ export default {
     await setSetting(env,'last_scheduler_event',`${new Date().toISOString()} ${action}`);
     await audit('started');
     try {
-      if (action === 'collect') await startCollection(env, 24, true);
+      if (action === 'collect') {
+        const first=k.minute<10;
+        await startCollection(env,first?(k.weekday===1?72:24):1,true,first?'all':'brief');
+      }
       if (action === 'digest') {
         const result=await queueDigest(env);
         await audit(result.already_sent?'already_sent':'queued');

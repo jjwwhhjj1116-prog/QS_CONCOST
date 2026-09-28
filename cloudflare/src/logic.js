@@ -34,12 +34,17 @@ export function dateOnly(value) {
   const date=new Date(value2+'T00:00:00Z');
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0,10)===value2 ? value2 : '';
 }
+export function noticeOpen(row,time=Date.now()) {
+  if(['취소','마감'].includes(row.notice_type))return false;
+  const date=dateOnly(row.deadline_at);
+  if(!date)return true; // Unknown deadline is not invented; backlog requires a known date separately.
+  const clock=String(row.deadline_at).match(/(?:T|\s)(\d{2}:\d{2}(?::\d{2})?)/)?.[1];
+  return Date.parse(`${date}T${clock||'23:59:59'}+09:00`)>=time;
+}
 export function todayDigest(rows, time = Date.now()) {
   const today = kstParts(time).date;
   // Missing publication date is unknown, NOT newly published today.
-  return rows.filter(row => dateOnly(row.published_at) === today &&
-    !['취소', '마감'].includes(row.notice_type) &&
-    (!dateOnly(row.deadline_at) || dateOnly(row.deadline_at) >= today));
+  return rows.filter(row => dateOnly(row.published_at) === today && noticeOpen(row,time));
 }
 
 export function validateResult(result, source) {
