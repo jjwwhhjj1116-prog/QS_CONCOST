@@ -13,7 +13,7 @@ from .scoring import MIN_NOTICE_SCORE, score_notice
 
 BASE_URL = (
     "https://apis.data.go.kr/1613000/"
-    "ApHusBidPblAncInfoOfferServiceV2/getPblAncDeSearchV2"
+    "ApHusBidPblAncInfoOfferServiceV3/getPblAncDeSearchV3"
 )
 
 

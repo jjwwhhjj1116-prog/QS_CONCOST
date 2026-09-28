@@ -49,7 +49,7 @@ export async function collectOtherBid(job,env,fetcher,requestText) {
     const params={serviceKey:env.DATA_GO_KR_SERVICE_KEY,pageNo:job.next_page,numOfRows:PAGE_SIZE,_type:'json'};
     if(id==='lh') {url=new URL('https://openapi.ebid.lh.or.kr/ebid.com.openapi.service.OpenBidInfoList.dev');Object.assign(params,{tndrbidRegDtStart:job.start_date.slice(0,8),tndrbidRegDtEnd:job.end_date.slice(0,8)});}
     else if(id.startsWith('kwater-')) {url=new URL('https://apis.data.go.kr/B500001/ebid/tndr3/'+id.slice(7));params.searchDt=job.start_date.slice(0,6);}
-    else {url=new URL('https://apis.data.go.kr/1613000/ApHusBidPblAncInfoOfferServiceV2/getPblAncDeSearchV2');Object.assign(params,{startDate:job.start_date.slice(0,8),endDate:job.end_date.slice(0,8)});}
+    else {url=new URL('https://apis.data.go.kr/1613000/ApHusBidPblAncInfoOfferServiceV3/getPblAncDeSearchV3');Object.assign(params,{startDate:job.start_date.slice(0,8),endDate:job.end_date.slice(0,8)});}
     url.search=new URLSearchParams(params);
     const text=await requestText(url,fetcher);
     ({items,total}=id==='lh'?xmlResponse(text):extract(JSON.parse(text)));

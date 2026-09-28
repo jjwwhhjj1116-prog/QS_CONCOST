@@ -84,6 +84,17 @@ test('law credentials are required and API schema failure stays explicit',async(
   await assert.rejects(collectExtraPage({source_id:'law-0',start_date:'202609010000',end_date:'202609080000',next_page:1},{LAW_API_OC:'test'},async()=>Response.json({error:'bad'})),/schema_unknown/);
   assert.throws(()=>xmlResponse('<html>service unavailable</html>'),/api_error/);
 });
+
+test('K-apt uses the current V3 service and retains date/pagination guards',async()=>{
+  const job={source_id:'kapt-api',start_date:'202609250000',end_date:'202609282359',next_page:1};
+  const result=await collectExtraPage(job,{DATA_GO_KR_SERVICE_KEY:'fixture'},async url=>{
+    assert.match(url.pathname,/ApHusBidPblAncInfoOfferServiceV3\/getPblAncDeSearchV3$/);
+    assert.equal(url.searchParams.get('startDate'),'20260925');
+    assert.equal(url.searchParams.get('endDate'),'20260928');
+    return Response.json({response:{header:{resultCode:'00'},body:{items:[{bidNum:'42',bidTitle:'공사비 검증 용역',bidRegDate:'2026-09-28',bidDeadline:'2026-10-10'}],totalCount:1}}});
+  });
+  assert.equal(result.candidates,1);assert.equal(result.rows.length,1);assert.equal(result.more,false);
+});
 test('response byte limit stops oversized upstream data',async()=>{
   await assert.rejects(requestText('https://example.org',async()=>new Response('x'.repeat(1500001))),/too_large/);
 });

@@ -106,6 +106,13 @@ npx wrangler dev --local
 
 ## 최신 인수인계 (2026-09-28, 미발송 공고 누락 수정)
 
+### 2026-09-28 재개 체크포인트: 공동주택 API 주소 복구
+
+- 시작 HEAD `1b1b408`, migration 브랜치, dirty 없음. 앱 종료에 대비해 기관별로 수정/검증/배포를 분리한다.
+- K-apt V2 실호출은 HTTP 400 / `NO_OPENAPI_SERVICE_ERROR` / 12. 공식 https://www.data.go.kr/data/15058166/openapi.do 내 Swagger는 V3다. JS/Python 주소를 V3로 최소 변경했다(포니테일 적용).
+- 실제 V3 조회 2026-09-25~28: HTTP 200, resultCode 00, 총 95건 / 첫 페이지 10건 / 첫 등록일 2026-09-28. 적합도 선별 전 건수이며 운영 저장 완료를 의미하지 않는다. `python cloudflare/test/check-kapt.py`로 재현(키/URL 미출력).
+- Node 47/47 통과. 다음: 이 커밋 자동배포 결과 확인, 운영 K-apt 수집 확인. 도로공사는 로컬 동일 코드에서 공사/용역 각각 후보 5건 조회되지만 Cloudflare는 collection_failed이므로 아직 미해결. LH/서울교통공사 526, 국토부 시간초과도 미해결. 메일 재발송/DB/주소록 변경 없음.
+
 ### 운영 원칙: 자동 수집과 검증 후 자동 배포
 
 - 수집/메일 실행 주체는 Cloudflare Cron 한 곳이다. 관리자 로그인이나 PC 실행에 의존하지 않는다. GitHub의 기존 Render 수집/메일 워크플로는 비활성화 유지한다.
