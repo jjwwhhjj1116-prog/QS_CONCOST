@@ -200,10 +200,11 @@ export default {
           const payload=JSON.parse(await requestText(upstream));
           const response=payload?.response||payload,header=response?.header;
           const code=header?.resultCode??payload?.OpenAPI_ServiceResponse?.cmmMsgHeader?.returnReasonCode;
-          return json({diagnostic_only:true,format:payload?.response?'wrapped':payload?.header?'unwrapped':payload?.OpenAPI_ServiceResponse?'gateway':'unknown',
+          const metadata={diagnostic_only:true,format:payload?.response?'wrapped':payload?.header?'unwrapped':payload?.OpenAPI_ServiceResponse?'gateway':'unknown',
             api_code:/^\d{1,2}$/.test(String(code))?String(code):'missing_or_invalid',code_type:typeof code,
             header_present:Boolean(header),body_present:Boolean(response?.body),
-            encoded_key:/%[0-9a-f]{2}/i.test(key),key_whitespace:key.trim()!==key});
+            encoded_key:/%[0-9a-f]{2}/i.test(key),key_whitespace:key.trim()!==key};
+          return new Response('<!doctype html><meta charset="utf-8"><h1>공동주택 API 형식 진단</h1><pre>'+JSON.stringify(metadata,null,2)+'</pre>',{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
         }
         if(request.method==='GET'&&url.pathname==='/api/admin/digest-preview')return json(await digestPreview(env));
         if(url.pathname==='/api/admin/recovery-digest') {

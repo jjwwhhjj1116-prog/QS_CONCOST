@@ -18,7 +18,7 @@ function mountCollection(viewOf) {
     <div class="cf-progress"><progress id="cfProgress" max="100" aria-label="수집 작업 처리율"></progress><strong id="cfPercent">준비 중</strong></div>
     <p id="cfTasks"></p><dl id="cfCounts"></dl><p class="cf-note">저장 처리 건수이며 신규 공고 수와는 다릅니다. 기존 자료 갱신·중복 처리가 포함될 수 있습니다.</p>
     <details><summary>기관별 상세 결과</summary><div id="cfSources"></div></details>
-    <p id="cfElapsed" class="cf-note">창을 닫아도 서버의 수집은 계속됩니다.</p><div class="cf-actions"><button type="button" id="cfRetry" class="button" hidden>상태 다시 확인</button><button type="button" id="cfList" class="button primary">창 닫고 목록 보기</button></div>`;
+    <p id="cfElapsed" class="cf-note">창을 닫아도 서버의 수집은 계속됩니다.</p><div class="cf-actions"><a href="/api/admin/kapt-schema-probe">공동주택 API 형식 진단</a><button type="button" id="cfRetry" class="button" hidden>상태 다시 확인</button><button type="button" id="cfList" class="button primary">창 닫고 목록 보기</button></div>`;
   document.body.append(dialog);
   const style=document.createElement('style');style.textContent=`
     #cfCollection{box-sizing:border-box;width:560px;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);padding:28px;border:1px solid #dce5e9;border-radius:18px;color:#102b38;background:#fff;overflow:auto}
