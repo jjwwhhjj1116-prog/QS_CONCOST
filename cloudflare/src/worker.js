@@ -1,6 +1,6 @@
 import { filterRows, jobState, kstParts, scheduleAction, todayDigest } from './logic.js';
 import { initialJobs, collectPage } from './bid-api.js';
-import { extraJobs, collectExtraPage, BOARDS, INTELLIGENCE } from './extra-sources.js';
+import { extraJobs, collectExtraPage, BOARDS, INTELLIGENCE, requestText } from './extra-sources.js';
 import { sessionValid, sameOrigin, login, settingsRoute, collectionEnv, getSecret, requestBody, emailSettings, setSetting, getSetting } from './settings.js';
 import { trialUI } from './trial-ui.js';
 import { digestPreview,queueDigest,deliverMessage } from './mail.js';
@@ -190,6 +190,21 @@ export default {
         if(!await sessionValid(request,env))return json({error:'관리자 로그인이 필요합니다.'},401);
         if(request.method!=='GET'&&!sameOrigin(request))return json({error:'동일 사이트에서 요청하세요.'},403);
         const settings=await settingsRoute(request,env);if(settings)return settings;
+        // Temporary read-only, authenticated schema probe; remove after live diagnosis.
+        if(request.method==='GET'&&url.pathname==='/api/admin/kapt-schema-probe') {
+          const job=await env.DB.prepare("SELECT start_date,end_date FROM collection_jobs WHERE source_id='kapt-api' ORDER BY created_at DESC LIMIT 1").first();
+          const key=await getSecret(env,'DATA_GO_KR_SERVICE_KEY');
+          if(!job||!key)return json({error:'probe_not_ready'},409);
+          const upstream=new URL('https://apis.data.go.kr/1613000/ApHusBidPblAncInfoOfferServiceV3/getPblAncDeSearchV3');
+          upstream.search=new URLSearchParams({serviceKey:key,startDate:job.start_date.slice(0,8),endDate:job.end_date.slice(0,8),pageNo:1,numOfRows:20,_type:'json'});
+          const payload=JSON.parse(await requestText(upstream));
+          const response=payload?.response||payload,header=response?.header;
+          const code=header?.resultCode??payload?.OpenAPI_ServiceResponse?.cmmMsgHeader?.returnReasonCode;
+          return json({diagnostic_only:true,format:payload?.response?'wrapped':payload?.header?'unwrapped':payload?.OpenAPI_ServiceResponse?'gateway':'unknown',
+            api_code:/^\d{1,2}$/.test(String(code))?String(code):'missing_or_invalid',code_type:typeof code,
+            header_present:Boolean(header),body_present:Boolean(response?.body),
+            encoded_key:/%[0-9a-f]{2}/i.test(key),key_whitespace:key.trim()!==key});
+        }
         if(request.method==='GET'&&url.pathname==='/api/admin/digest-preview')return json(await digestPreview(env));
         if(url.pathname==='/api/admin/recovery-digest') {
           if(request.method==='POST')return json(await queueDigest(env,true),202);
