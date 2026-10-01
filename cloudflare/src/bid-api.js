@@ -44,7 +44,7 @@ export function normalize(row, sourceId) {
 }
 
 // Only a short numeric code is safe to retain; provider text may contain secrets.
-export const upstreamApiError = code => new Error('upstream_api_error' + (/^\d{1,2}$/.test(code) ? '_' + code.padStart(2, '0') : ''));
+export const upstreamApiError = code => new Error('upstream_api_error_' + (/^\d{1,2}$/.test(code) ? code.padStart(2, '0') : code === 'missing' || code === '' ? 'missing_code' : 'invalid_code'));
 export function extract(payload) {
   const response = payload?.response;
   const code = String(response?.header?.resultCode ?? 'missing');

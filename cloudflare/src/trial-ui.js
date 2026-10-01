@@ -18,7 +18,7 @@ function mountCollection(viewOf) {
     <div class="cf-progress"><progress id="cfProgress" max="100" aria-label="수집 작업 처리율"></progress><strong id="cfPercent">준비 중</strong></div>
     <p id="cfTasks"></p><dl id="cfCounts"></dl><p class="cf-note">저장 처리 건수이며 신규 공고 수와는 다릅니다. 기존 자료 갱신·중복 처리가 포함될 수 있습니다.</p>
     <details><summary>기관별 상세 결과</summary><div id="cfSources"></div></details>
-    <p id="cfElapsed" class="cf-note">창을 닫아도 서버의 수집은 계속됩니다.</p><div class="cf-actions"><a href="/api/admin/kapt-schema-probe">공동주택 API 형식 진단</a><button type="button" id="cfRetry" class="button" hidden>상태 다시 확인</button><button type="button" id="cfList" class="button primary">창 닫고 목록 보기</button></div>`;
+    <p id="cfElapsed" class="cf-note">창을 닫아도 서버의 수집은 계속됩니다.</p><div class="cf-actions"><button type="button" id="cfRetry" class="button" hidden>상태 다시 확인</button><button type="button" id="cfList" class="button primary">창 닫고 목록 보기</button></div>`;
   document.body.append(dialog);
   const style=document.createElement('style');style.textContent=`
     #cfCollection{box-sizing:border-box;width:560px;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);padding:28px;border:1px solid #dce5e9;border-radius:18px;color:#102b38;background:#fff;overflow:auto}
@@ -56,7 +56,8 @@ function mountCollection(viewOf) {
     const known={trial_daily_page_limit:'오늘의 수집 한도 도달 — 추가 조회 종료',missing_api_key:'공공데이터 인증키 미설정',missing_law_api_key:'법령 API 인증값 미설정',
       upstream_api_error_05:'원기관 API 응답 시간초과',upstream_api_error_10:'원기관 API 요청 조건 오류',upstream_api_error_12:'원기관 API 서비스 없음',
       upstream_api_error_20:'원기관 API 접근 권한 오류',upstream_api_error_22:'원기관 API 일일 호출 한도 초과',upstream_api_error_23:'원기관 API 순간 호출 제한',
-      upstream_api_error_29:'원기관 API 접속 IP 차단',upstream_api_error_30:'원기관 API 인증키 미등록',upstream_api_error_31:'원기관 API 인증키 만료'};
+      upstream_api_error_29:'원기관 API 접속 IP 차단',upstream_api_error_30:'원기관 API 인증키 미등록',upstream_api_error_31:'원기관 API 인증키 만료',
+      upstream_api_error_missing_code:'원기관 API 결과 코드 누락',upstream_api_error_invalid_code:'원기관 API 결과 코드 형식 오류'};
     if(known[code])return known[code];
     if(/timeout|deadline|timed out/.test(code))return '응답 시간초과 — 이번 수집에서 건너뜀';
     if(/526|certificate/i.test(code))return '원기관 보안 연결 오류';
