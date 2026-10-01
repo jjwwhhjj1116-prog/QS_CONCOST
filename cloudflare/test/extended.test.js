@@ -93,6 +93,17 @@ test('law credentials are required and API schema failure stays explicit',async(
   assert.throws(()=>xmlResponse('<html>service unavailable</html>'),/api_error/);
 });
 
+test('LH uses the official HTTPS gateway; permission errors never become no-data',async()=>{
+  const job={source_id:'lh',start_date:'202609280000',end_date:'202610012359',next_page:1};
+  const r=await collectExtraPage(job,{DATA_GO_KR_SERVICE_KEY:'fixture'},async url=>{
+    assert.equal(url.origin,'https://apis.data.go.kr');assert.equal(url.pathname,'/B552555/OpenBidInfoList/getOpenBidInfo');
+    assert.equal(url.searchParams.get('tndrbidRegDtStart'),'20260928');
+    return new Response('<response><header><resultCode>00</resultCode></header><body><totalCount>1</totalCount><item><bidNum>lh42</bidNum><bidnmKor>공사비 검증 용역</bidnmKor><cstrtnJobGbNm>용역</cstrtnJobGbNm><tndrbidRegDt>20261001</tndrbidRegDt></item></body></response>');
+  });
+  assert.equal(r.rows.length,1);assert.equal(r.rows[0].source,'LH');
+  await assert.rejects(collectExtraPage(job,{DATA_GO_KR_SERVICE_KEY:'fixture'},async()=>new Response('<OpenAPI_ServiceResponse><cmmMsgHeader><returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>',{status:403})),/upstream_api_key_not_registered/);
+});
+
 test('K-apt uses the current V3 service and retains date/pagination guards',async()=>{
   const job={source_id:'kapt-api',start_date:'202609250000',end_date:'202609282359',next_page:1};
   const result=await collectExtraPage(job,{DATA_GO_KR_SERVICE_KEY:'fixture'},async url=>{

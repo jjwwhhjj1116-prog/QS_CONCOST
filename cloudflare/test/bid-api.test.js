@@ -39,6 +39,18 @@ test('missing page is not silently accepted', async () => {
   await assert.rejects(collectPage({ source_id: 'g2b-service', next_page: 2 }, 'test', async () =>
     Response.json({ response: { header: { resultCode: '00' }, body: { totalCount: 50, items: [] } } })), /upstream_missing_page/);
 });
+
+test('agency refresh uses official institution search and the same G2B mail identity',async()=>{
+  const item={bidNtceNo:'metro42',bidNtceOrd:'000',bidNtceNm:'공사비 검증 용역',dminsttNm:'서울교통공사'};
+  const job={source_id:'jiwon-metro-service',next_page:1,start_date:'202609240000',end_date:'202610012359'};
+  const result=await collectPage(job,'fixture',async url=>{
+    assert.match(url.pathname,/getBidPblancListInfoServcPPSSrch$/);
+    assert.equal(url.searchParams.get('dminsttNm'),'서울교통공사');
+    return Response.json({response:{header:{resultCode:'00'},body:{totalCount:1,items:[item]}}});
+  });
+  assert.deepEqual(result.rows,[normalize(item,'g2b-service')]);
+  await assert.rejects(collectPage(job,'fixture',async()=>Response.json({response:{header:{resultCode:'00'},body:{totalCount:1,items:[{...item,dminsttNm:'다른 기관'}]}}})),/ignored_agency_filter/);
+});
 test('service relevance and Seoul safety filter stay separate', () => {
   for (const title of ['부산 정밀안전진단 용역', '서울 정밀안전진단 용역']) {
     const row = { title, ...scoreNotice(title) };

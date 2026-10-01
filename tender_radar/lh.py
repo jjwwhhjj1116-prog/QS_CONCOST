@@ -11,7 +11,7 @@ from xml.etree import ElementTree
 from .scoring import MIN_NOTICE_SCORE, score_notice
 
 
-BASE_URL = "http://openapi.ebid.lh.or.kr/ebid.com.openapi.service.OpenBidInfoList.dev"
+BASE_URL = "https://apis.data.go.kr/B552555/OpenBidInfoList/getOpenBidInfo"
 LIST_URL = "https://ebid.lh.or.kr/ebid.et.tp.cmd.BidMasterListCmd.dev"
 
 

@@ -1,5 +1,5 @@
 import { scoreNotice, shouldKeep } from './scoring.js';
-import { extract, PAGE_SIZE } from './bid-api.js';
+import { extract, PAGE_SIZE, AGENCY_SOURCES, collectPage } from './bid-api.js';
 import { dateOnly } from './logic.js';
 import {OTHER_BIDS,collectOtherBid} from './other-bids.js';
 
@@ -33,7 +33,7 @@ export async function requestText(url, fetcher = fetch, init={}) {
   let response;
   try { response = await fetcher(url, {...init,signal:AbortSignal.timeout(15000),headers:{'User-Agent':'CONCOST-Radar/1.0',...init.headers}}); }
   catch { throw new Error('upstream_timeout_or_network'); }
-  if (!response.ok) throw new Error(`upstream_http_${response.status}`);
+  if(!response.body) {if(!response.ok)throw new Error(`upstream_http_${response.status}`);return '';}
   const reader = response.body.getReader(); let size=0; const chunks=[];
   try { while (true) { const {done,value}=await reader.read(); if(done)break;
     size+=value.length; if(size>1500000)throw new Error('upstream_response_too_large'); chunks.push(value); }
@@ -43,7 +43,13 @@ export async function requestText(url, fetcher = fetch, init={}) {
   } finally { await reader.cancel().catch(()=>{}); }
   const bytes=new Uint8Array(size); let offset=0; for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
   const charset=response.headers.get('content-type')?.match(/charset=([\w-]+)/i)?.[1] || 'utf-8';
-  return new TextDecoder(charset).decode(bytes).replace(/^\uFEFF/,'');
+  const text=new TextDecoder(charset).decode(bytes).replace(/^\uFEFF/,'');
+  if(!response.ok) {
+    const code=text.match(/<returnReasonCode>\s*(\d+)\s*<\/returnReasonCode>|"returnReasonCode"\s*:\s*"?(\d+)/);
+    const reason={'20':'upstream_api_access_denied','30':'upstream_api_key_not_registered','31':'upstream_api_key_expired','12':'upstream_api_service_unavailable'}[code?.[1]||code?.[2]];
+    throw new Error(reason||`upstream_http_${response.status}`);
+  }
+  return text;
 }
 const safeLink = (href, base) => { try { const u=new URL(href,base); return ['http:','https:'].includes(u.protocol) ? u.href : ''; } catch { return ''; } };
 function article(source,key,title,date,url,category='건설 주요뉴스') {
@@ -147,12 +153,16 @@ export function extraJobs(now,lookback,scope='all') {
   if(scope==='jiwon')ids=ids.filter(x=>x.startsWith('jiwon-'));
   else if(scope==='news')ids=ids.filter(x=>x.startsWith('news-'));
   else ids.push(...(scope==='brief'?[]:Object.keys(INTELLIGENCE)),...Object.keys(OTHER_BIDS));
+  if(scope!=='news')ids.push(...Object.keys(AGENCY_SOURCES));
   if(scope!=='jiwon')ids.push(...LAW_QUERIES.map((_,i)=>`law-${i}`));
-  return ids.map(source_id=>({source_id,label:BOARDS[source_id]?.[0]||OTHER_BIDS[source_id]||INTELLIGENCE[source_id]?.slice(1,3).join(' ')||`국가법령 ${LAW_QUERIES[Number(source_id.slice(4))]}`,
+  return ids.map(source_id=>({source_id,label:BOARDS[source_id]?.[0]||OTHER_BIDS[source_id]||
+    (AGENCY_SOURCES[source_id]?`서울교통공사 나라장터 ${source_id.endsWith('service')?'용역':'공사'} (게시판 별도)`:'')||
+    INTELLIGENCE[source_id]?.slice(1,3).join(' ')||`국가법령 ${LAW_QUERIES[Number(source_id.slice(4))]}`,
     start_date:fmt(now-lookback*3600000),end_date:fmt(now)}));
 }
 export async function collectExtraPage(job,env,fetcher=fetch) {
   const id=job.source_id;
+  if(AGENCY_SOURCES[id])return collectPage(job,env.DATA_GO_KR_SERVICE_KEY,fetcher);
   if(OTHER_BIDS[id])return collectOtherBid(job,env,fetcher,requestText);
   if(BOARDS[id]) {
     // MOLIT sets a visitor cookie on a same-URL 307. Fetch has no cookie jar.

@@ -106,6 +106,15 @@ npx wrangler dev --local
 
 ## 최신 인수인계 (2026-09-28, 미발송 공고 누락 수정)
 
+### 2026-10-01 LH 공식 게이트웨이 및 서울교통공사 보완 수집
+
+- 시작 HEAD `03a4c0f`, `codex/cloudflare-migration`. 기존 메일/주소록/발송 이력/적합도 기준은 유지한다.
+- LH 기존 직접 서버는 Cloudflare HTTP 526. 공식 신규 데이터 15159012의 `https://apis.data.go.kr/B552555/OpenBidInfoList/getOpenBidInfo`로 JS/Python 수집 주소만 교체. 최초 새 서비스는 등록 거부(403/code 30)였고, 사용자가 활용신청 완료 후 200/resultCode 00 확인. 서비스 등록 거부를 0건으로 숨기지 않고 별도 오류로 기록한다.
+- 실제 2026-09-24~10-01: LH 후보 61건/4페이지 전부 읽음, 현재 40점 기준 선별 0건. Python 원본 대조 최고 26점. 로컬 workerd 실제 조회이며 운영 DB 반영 검증은 배포 후 별도로 기록한다. EUC-KR 한글 응답을 기존 문자셋 처리로 정상 해석.
+- 서울교통공사 원게시판 인증서 체인 오류는 미해결. 공식 나라장터 `PPSSrch`의 `dminsttNm=서울교통공사` 조회를 별도 보완 작업으로 추가. 실제 용역 후보 2/공사 후보 12, 선별 각각 0. 원게시판 성공으로 표시하지 않으며, 기존 나라장터 공고 ID를 유지해 DB/메일 중복 방지. API가 기관 조건을 무시하면 명시적으로 실패한다.
+- 검증: Node 52/52, Python 정책 일치 3/3, 배포 dry-run 통과. 실제 조회 재현: 저장소 루트 Python으로 `get_settings().service_key`를 읽고 JSON `DATA_GO_KR_SERVICE_KEY`를 `cloudflare/test/check-agency-runtime.mjs` 표준입력에 전달하여 cloudflare 폴더에서 실행. 키를 명령 인수/파일/출력에 넣지 않는다. DB/메일을 건드리지 않는 읽기 전용 점검이다.
+- 기존 운영 10/01: 국토부 후보 10/선별 8 succeeded, 최근 자동수집 09:51 KST; 메일 10:00:33 큐 등록 및 날짜별 sent 기록 확인. 10:01~04 중복 차단. 실제 수신함 도착은 미확인. 다음: 이 변경의 GitHub 자동배포 및 운영 LH/보완 수집 결과 대조.
+
 ### 2026-09-28 국토부 리다이렉트 및 기관 등록일 수정
 
 - 시작 `461be4d`, migration 브랜치 clean. 포니테일 기준으로 수집 구조/기준/메일을 유지하는 최소 수정.

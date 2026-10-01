@@ -8,6 +8,11 @@ export const SOURCES = {
   'nuri-construction': ['누리장터', '공사', 'ao/PrvtBidNtceService/getPrvtBidPblancListInfoCnstwk'],
   'nuri-other': ['누리장터', '기타', 'ao/PrvtBidNtceService/getPrvtBidPblancListInfoEtc'],
 };
+// Retain G2B identities: a targeted agency refresh must not duplicate mail items.
+export const AGENCY_SOURCES={
+  'jiwon-metro-service':['g2b-service','서울교통공사'],
+  'jiwon-metro-construction':['g2b-construction','서울교통공사'],
+};
 const pick = (row, ...keys) => keys.map(k => row[k]).find(v => v !== undefined && v !== null && v !== '') ?? '';
 function money(value) {
   if (value === '') return null;
@@ -66,10 +71,13 @@ export function initialJobs(now, lookback) {
 
 export async function collectPage(job, credential, fetcher = fetch) {
   if (!credential) throw new Error('missing_api_key');
-  if (!SOURCES[job.source_id]) throw new Error('invalid_source');
-  const url = new URL(`https://apis.data.go.kr/1230000/${SOURCES[job.source_id][2]}`);
+  const agency=AGENCY_SOURCES[job.source_id];
+  const sourceId=agency?.[0]||job.source_id;
+  if (!SOURCES[sourceId]) throw new Error('invalid_source');
+  const url = new URL(`https://apis.data.go.kr/1230000/${SOURCES[sourceId][2]}${agency?'PPSSrch':''}`);
   url.search = new URLSearchParams({ serviceKey: credential, type: 'json', inqryDiv: '1',
-    inqryBgnDt: job.start_date, inqryEndDt: job.end_date, numOfRows: PAGE_SIZE, pageNo: job.next_page });
+    inqryBgnDt: job.start_date, inqryEndDt: job.end_date, numOfRows: PAGE_SIZE, pageNo: job.next_page,
+    ...(agency?{dminsttNm:agency[1]}:{}) });
   let response;
   try { response = await fetcher(url, { signal: AbortSignal.timeout(15000) }); }
   catch { throw new Error('upstream_timeout_or_network'); }
@@ -80,7 +88,8 @@ export async function collectPage(job, credential, fetcher = fetch) {
   if (items.length > PAGE_SIZE) throw new Error('upstream_ignored_page_size');
   const offset = (job.next_page - 1) * PAGE_SIZE;
   if (!items.length && total > offset) throw new Error('upstream_missing_page');
-  const rows = items.map(item => normalize(item, job.source_id)).filter(shouldKeep);
+  if(agency && items.some(item=>String(item.dminsttNm||'').trim()!==agency[1]))throw new Error('upstream_ignored_agency_filter');
+  const rows = items.map(item => normalize(item, sourceId)).filter(shouldKeep);
   return { rows, total, candidates: items.length, filtered: items.length - rows.length,
     more: offset + items.length < total };
 }
