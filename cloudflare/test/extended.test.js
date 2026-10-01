@@ -54,11 +54,34 @@ test('analytics exhausts its share without taking notice budget; global daily li
   db.prepare('INSERT INTO trial_budget VALUES (?,?)').run('2026-09-28:analytics',200);
   t.mock.method(globalThis,'fetch',async()=>Response.json({response:{header:{resultCode:'00'},body:{items:[],totalCount:0}}}));
   const job=id=>db.prepare('SELECT id,next_page FROM collection_jobs WHERE source_id=? LIMIT 1').get(id);
-  const consume=async id=>{const j=job(id);await worker.queue({messages:[{body:{id:j.id,page:j.next_page},attempts:3,ack(){},retry(){throw Error('unexpected retry');}}]},env);return db.prepare('SELECT state,error FROM collection_jobs WHERE id=?').get(j.id);};
+  const consume=async id=>{const j=job(id);await worker.queue({messages:[{body:{id:j.id,page:j.next_page},attempts:1,ack(){},retry(){throw Error('unexpected retry');}}]},env);return db.prepare('SELECT state,error FROM collection_jobs WHERE id=?').get(j.id);};
   assert.equal((await consume('contract-Servc')).error,'trial_daily_page_limit');
   assert.equal((await consume('g2b-service')).state,'succeeded');
   db.prepare('INSERT INTO trial_budget VALUES (?,?)').run('2026-09-28',799);
   assert.equal((await consume('g2b-construction')).error,'trial_daily_page_limit');
+});
+
+test('permanent API errors stop immediately; transient failures retry without losing committed pages',async t=>{
+  t.mock.method(Date,'now',()=>Date.parse('2026-09-28T09:00:30+09:00'));
+  let code;t.mock.method(globalThis,'fetch',async()=>{
+    if(code==='timeout')throw Error('private-url-must-not-be-logged');
+    return Response.json({response:{header:{resultCode:code,resultMsg:'private-key-must-not-be-logged'},body:{items:[],totalCount:0}}});
+  });
+  for(code of ['10','12','20','22','29','30','31','05','23','timeout']) {
+    const {env,db}=fixture();env.SCHEDULE_ENABLED='true';await worker.scheduled({scheduledTime:Date.now()},env);
+    const job=db.prepare("SELECT id FROM collection_jobs WHERE source_id='g2b-service' LIMIT 1").get();
+    db.prepare('UPDATE collection_jobs SET next_page=2,candidates=20,kept=1,filtered=19 WHERE id=?').run(job.id);
+    let acked=false,retried=false;
+    const message={body:{id:job.id,page:2},attempts:1,ack(){acked=true;},retry({delaySeconds}){assert.equal(delaySeconds,10);retried=true;}};
+    await worker.queue({messages:[message]},env);
+    const state=db.prepare('SELECT state,error,next_page,candidates,kept FROM collection_jobs WHERE id=?').get(job.id);
+    const transient=['05','23','timeout'].includes(code);
+    assert.equal(state.state,transient?'retrying':'failed');assert.equal(acked,!transient);assert.equal(retried,transient);
+    assert.equal(state.error,code==='timeout'?'upstream_timeout_or_network':'upstream_api_error_'+code);
+    assert.equal(state.next_page,2);assert.equal(state.candidates,20);assert.equal(state.kept,1);
+    if(transient){const previous=code;code='00';await worker.queue({messages:[{...message,attempts:2,retry(){throw Error('unexpected retry');}}]},env);code=previous;
+      assert.equal(db.prepare('SELECT state FROM collection_jobs WHERE id=?').get(job.id).state,'succeeded');}
+  }
 });
 test('dates never invent today and normalize compact law timestamps',()=>{
   assert.equal(dateOnly('20260908'),'2026-09-08');assert.equal(dateOnly('2026.09.08'),'2026-09-08');
@@ -91,6 +114,7 @@ test('law credentials are required and API schema failure stays explicit',async(
   await assert.rejects(collectExtraPage({source_id:'law-0'},{}),/missing_law/);
   await assert.rejects(collectExtraPage({source_id:'law-0',start_date:'202609010000',end_date:'202609080000',next_page:1},{LAW_API_OC:'test'},async()=>Response.json({error:'bad'})),/schema_unknown/);
   assert.throws(()=>xmlResponse('<html>service unavailable</html>'),/api_error/);
+  assert.throws(()=>xmlResponse('<response><header><resultCode>22</resultCode><resultMsg>do-not-log</resultMsg></header></response>'),{message:'upstream_api_error_22'});
 });
 
 test('LH uses the official HTTPS gateway; permission errors never become no-data',async()=>{

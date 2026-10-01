@@ -1,6 +1,6 @@
 import {scoreNotice,shouldKeep} from './scoring.js';
 import {dateOnly} from './logic.js';
-import {extract,PAGE_SIZE} from './bid-api.js';
+import {extract,PAGE_SIZE,upstreamApiError} from './bid-api.js';
 // Source mappings mirror tender_radar/{lh,kwater,apartment_api,expressway}.py.
 export const OTHER_BIDS={'lh':'LH 입찰','kwater-cntrwkList':'K-water 공사','kwater-servcList':'K-water 용역','kapt-api':'공동주택 입찰 API','ex-CT':'도로공사 공사','ex-SV':'도로공사 용역'};
 const str=(v)=>String(v??'');
@@ -29,7 +29,7 @@ export function xmlResponse(text) {
   const value=(tag,s=text)=>s.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`,'i'))?.[1]?.trim()||'';
   const code=value('resultCode');
   if(code==='03'&&value('resultMsg')==='NODATA_ERROR')return {items:[],total:0};
-  if(!['00','0'].includes(code))throw new Error('upstream_api_error');
+  if(!['00','0'].includes(code))throw upstreamApiError(code);
   const total=Number(value('totalCount'));if(!value('totalCount')||!Number.isInteger(total))throw new Error('upstream_invalid_xml');
   const items=[...text.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map(m=>Object.fromEntries([...m[1].matchAll(/<([\w]+)>([\s\S]*?)<\/\1>/g)].map(x=>[x[1],x[2].replace(/^<!\[CDATA\[|\]\]>$/g,'').trim()])));
   return {items,total};

@@ -43,11 +43,13 @@ export function normalize(row, sourceId) {
   };
 }
 
+// Only a short numeric code is safe to retain; provider text may contain secrets.
+export const upstreamApiError = code => new Error('upstream_api_error' + (/^\d{1,2}$/.test(code) ? '_' + code.padStart(2, '0') : ''));
 export function extract(payload) {
   const response = payload?.response;
   const code = String(response?.header?.resultCode ?? 'missing');
   if (['03','3'].includes(code) && response.header.resultMsg === 'NODATA_ERROR') return { items: [], total: 0 };
-  if (!['00','0'].includes(code)) throw new Error('upstream_api_error');
+  if (!['00','0'].includes(code)) throw upstreamApiError(code);
   const body = response.body;
   if (!body || !Object.hasOwn(body, 'totalCount')) throw new Error('invalid_api_body');
   let items = body.items?.item ?? body.items ?? [];

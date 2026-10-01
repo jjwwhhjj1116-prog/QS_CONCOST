@@ -53,6 +53,11 @@ function mountCollection(viewOf) {
   }
   function reason(code){
     if(!code)return '';
+    const known={trial_daily_page_limit:'오늘의 수집 한도 도달 — 추가 조회 종료',missing_api_key:'공공데이터 인증키 미설정',missing_law_api_key:'법령 API 인증값 미설정',
+      upstream_api_error_05:'원기관 API 응답 시간초과',upstream_api_error_10:'원기관 API 요청 조건 오류',upstream_api_error_12:'원기관 API 서비스 없음',
+      upstream_api_error_20:'원기관 API 접근 권한 오류',upstream_api_error_22:'원기관 API 일일 호출 한도 초과',upstream_api_error_23:'원기관 API 순간 호출 제한',
+      upstream_api_error_29:'원기관 API 접속 IP 차단',upstream_api_error_30:'원기관 API 인증키 미등록',upstream_api_error_31:'원기관 API 인증키 만료'};
+    if(known[code])return known[code];
     if(/timeout|deadline|timed out/.test(code))return '응답 시간초과 — 이번 수집에서 건너뜀';
     if(/526|certificate/i.test(code))return '원기관 보안 연결 오류';
     if(/network/i.test(code))return '원기관 연결 오류';

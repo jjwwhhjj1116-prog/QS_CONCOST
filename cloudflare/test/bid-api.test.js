@@ -12,6 +12,8 @@ test('seven-day collection creates 35 distinct day/category jobs', () => {
 });
 test('API error is not a valid no-data result', () => {
   assert.throws(() => extract({}), /upstream_api_error/);
+  for(const code of ['05','22','23','30','5'])assert.throws(() => extract({response:{header:{resultCode:code,resultMsg:'secret=do-not-log'}}}),{message:'upstream_api_error_'+code.padStart(2,'0')});
+  assert.throws(() => extract({response:{header:{resultCode:'30 secret=do-not-log',resultMsg:'secret=do-not-log'}}}),{message:'upstream_api_error'});
   assert.throws(() => extract({ response: { header: { resultCode: '00' } } }), /invalid_api_body/);
   assert.deepEqual(extract({ response: { header: { resultCode: '03', resultMsg: 'NODATA_ERROR' } } }), { items: [], total: 0 });
 });

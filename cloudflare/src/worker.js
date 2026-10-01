@@ -110,9 +110,11 @@ async function consume(message, env) {
   } catch (error) {
     const checkpoint = await env.DB.prepare('SELECT next_page FROM collection_jobs WHERE id=?').bind(task.id).first();
     if (checkpoint.next_page > task.page) { message.retry({ delaySeconds: 5 }); return; }
-    const retry = message.attempts < 3 && Date.now() + 30000 < persisted.deadline;
     // Never log arbitrary exception text: upstream URLs may contain API credentials.
     const code = /^[a-z_0-9]+$/.test(error.message) ? error.message : 'collection_failed';
+    // Quotas/credentials/invalid requests cannot recover during this run. Keep partial pages.
+    const permanent = /^(trial_daily_page_limit|missing_(law_)?api_key|upstream_api_(error_(10|12|20|22|29|30|31)|access_denied|key_not_registered|key_expired|service_unavailable))$/.test(code);
+    const retry = !permanent && message.attempts < 3 && Date.now() + 30000 < persisted.deadline;
     await env.DB.prepare('UPDATE collection_jobs SET state=?,error=?,updated_at=?,lease_until=0 WHERE id=?')
       .bind(retry ? 'retrying' : 'failed', code, Date.now(), task.id).run();
     if (retry) message.retry({ delaySeconds: 10 }); else message.ack();
