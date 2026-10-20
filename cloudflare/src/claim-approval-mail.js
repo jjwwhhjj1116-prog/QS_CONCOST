@@ -7,6 +7,16 @@ function validReportLinks(text){
   try{const a=new URL(report),b=new URL(review);return origins.has(a.origin)&&a.origin===b.origin&&!a.username&&!a.password&&!b.username&&!b.password&&a.pathname==='/reports/studio'&&a.searchParams.get('step')==='5'&&uuid.test(a.searchParams.get('caseId')??'')&&b.pathname==='/approval'&&uuid.test(b.searchParams.get('reviewId')??'')&&!a.hash&&!b.hash&&[...a.searchParams].length===2&&[...b.searchParams].length===1;}catch{return false;}
 }
 
+const escapeHtml=value=>value.replace(/[&<>"']/gu,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function approvalHtml(text){
+  const content=text.split('\n').map(line=>{
+    const link=line.match(/^(승인 보고서 확인·출력|결재 내용): (https:\/\/\S+)$/u);
+    if(link)return `<p style="margin:16px 0"><a href="${escapeHtml(link[2])}" style="display:inline-block;padding:12px 18px;border:1px solid #245b99;border-radius:5px;color:#245b99;text-decoration:none;font-weight:bold">${link[1]}</a></p>`;
+    return `<p style="margin:8px 0">${escapeHtml(line)||'&nbsp;'}</p>`;
+  }).join('');
+  return `<div lang="ko" style="font-family:Arial,'Malgun Gothic',sans-serif;font-size:15px;line-height:1.7;color:#192b40">${content}</div>`;
+}
+
 // Only the named service binding reaches this handler. The public QS HTTP
 // handler, scheduler, recipients and delivery history remain separate.
 export async function claimApprovalMail(request,env,fetcher=fetch){
@@ -17,7 +27,7 @@ export async function claimApprovalMail(request,env,fetcher=fetch){
   if(env.MAIL_MODE!=='live')return json({code:'APPROVAL_MAIL_NOT_CONFIGURED'},503);
   const from=await getSetting(env,'from_email',env.DIGEST_FROM_EMAIL||''),key=await getSecret(env,'RESEND_API_KEY');
   if(!key||!validEmail(from.match(/<([^<>]+)>$/u)?.[1]||from))return json({code:'APPROVAL_MAIL_NOT_CONFIGURED'},503);
-  const response=await fetcher('https://api.resend.com/emails',{method:'POST',redirect:'manual',signal:AbortSignal.timeout(15000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json','Idempotency-Key':`claim-center-${body.idempotencyKey}`},body:JSON.stringify({from,to:[body.to],subject:body.subject,text:body.text})});
+  const response=await fetcher('https://api.resend.com/emails',{method:'POST',redirect:'manual',signal:AbortSignal.timeout(15000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json','Idempotency-Key':`claim-center-${body.idempotencyKey}`},body:JSON.stringify({from,to:[body.to],subject:body.subject,text:body.text,html:approvalHtml(body.text)})});
   if(!response.ok)return json({code:'APPROVAL_MAIL_PROVIDER_REJECTED'},response.status);
   const receipt=await response.json().catch(()=>null);
   if(!uuid.test(receipt?.id??''))return json({code:'APPROVAL_MAIL_RECEIPT_UNKNOWN'},202);
