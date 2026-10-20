@@ -46,3 +46,12 @@ test('approval HTML escapes name/body markup and quotes without changing plain t
  assert.match(delivered.html,/&quot;|&#34;/u);assert.match(delivered.html,/&#39;|&#x27;|&apos;/u);
  assert.equal((delivered.html.match(/<a\b/giu)||[]).length,2);
 });
+
+test('duplicate report/review link labels reject before settings lookup or provider call',async()=>{
+ for(const label of ['승인 보고서 확인·출력','결재 내용'])for(const external of [false,true]){
+  const original=payload();const url=external?'https://evil.invalid/inbox':label==='결재 내용'?origin+'/approval?reviewId='+id:origin+'/reports/studio?caseId='+id+'&step=5';
+  const f=fixture();let providerCalls=0;
+  const response=await claimApprovalMail(req({...original,text:original.text+'\n'+label+': '+url}),f.env,async()=>{providerCalls++;return Response.json({id});});
+  assert.equal(response.status,400,`${label} duplicate external=${external}`);assert.equal(f.reads.length,0);assert.equal(providerCalls,0);
+ }
+});

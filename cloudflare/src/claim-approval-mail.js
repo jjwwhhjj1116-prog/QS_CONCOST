@@ -3,7 +3,9 @@ import {getSetting,getSecret,validEmail,json} from './settings.js';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const origins=new Set(['https://concost-claim-center-preview.jjwwhhjj1116.workers.dev','https://concost-claim-center-development.jjwwhhjj1116.workers.dev']);
 function validReportLinks(text){
-  const report=text.match(/^승인 보고서 확인·출력: (https:\/\/\S+)$/mu)?.[1],review=text.match(/^결재 내용: (https:\/\/\S+)$/mu)?.[1];
+  const reports=[...text.matchAll(/^승인 보고서 확인·출력: (https:\/\/\S+)$/gmu)],reviews=[...text.matchAll(/^결재 내용: (https:\/\/\S+)$/gmu)];
+  if(reports.length!==1||reviews.length!==1)return false;
+  const report=reports[0][1],review=reviews[0][1];
   try{const a=new URL(report),b=new URL(review);return origins.has(a.origin)&&a.origin===b.origin&&!a.username&&!a.password&&!b.username&&!b.password&&a.pathname==='/reports/studio'&&a.searchParams.get('step')==='5'&&uuid.test(a.searchParams.get('caseId')??'')&&b.pathname==='/approval'&&uuid.test(b.searchParams.get('reviewId')??'')&&!a.hash&&!b.hash&&[...a.searchParams].length===2&&[...b.searchParams].length===1;}catch{return false;}
 }
 
