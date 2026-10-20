@@ -65,7 +65,7 @@ jobs:
       - run: npm ci --ignore-scripts
         working-directory: cloudflare
       # Schema changes require their own reviewed migration; never auto-delete data.
-      - run: npx wrangler deploy
+      - run: npx wrangler deploy --keep-vars
         working-directory: cloudflare
       - name: Check public service without collecting or sending mail
         run: |
