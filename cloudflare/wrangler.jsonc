@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "concost-migration-trial",
-  "main": "src/worker.js",
+  "main": "src/service-entry.js",
   "keep_names": false,
   "compatibility_date": "2026-09-08",
   "workers_dev": true,
